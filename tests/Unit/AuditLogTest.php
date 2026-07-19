@@ -16,29 +16,26 @@ final class AuditLogTest extends WP_UnitTestCase {
 	public function test_create_table_creates_the_audit_table(): void {
 		global $wpdb;
 
-		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		AuditLog::create_table();
 
-		$table_name      = AuditLog::table_name();
-		$charset_collate = $wpdb->get_charset_collate();
-		$sql             = "CREATE TABLE $table_name (\n\t\t\tid BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n\t\t\tcreated_at DATETIME NOT NULL,\n\t\t\tPRIMARY KEY  (id)\n\t\t) $charset_collate;";
+		// The WP core test suite rewrites CREATE TABLE to CREATE TEMPORARY
+		// TABLE for automatic cleanup between test runs, and MySQL
+		// temporary tables are invisible to SHOW TABLES/information_schema
+		// by design — so existence must be verified by querying the table
+		// directly rather than via a catalog lookup.
+		$wpdb->query( 'SELECT 1 FROM ' . AuditLog::table_name() . ' LIMIT 1' );
 
-		$before_error = $wpdb->last_error;
-		$dbdelta_result = dbDelta( $sql );
-		$after_dbdelta_error = $wpdb->last_error;
-		$after_dbdelta_query = $wpdb->last_query;
+		$this->assertSame( '', $wpdb->last_error );
+	}
 
-		$commit_ok    = $wpdb->query( 'COMMIT' );
-		$commit_error = $wpdb->last_error;
+	public function test_create_table_is_idempotent(): void {
+		global $wpdb;
 
-		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) );
+		AuditLog::create_table();
+		AuditLog::create_table();
 
-		$this->assertSame(
-			$table_name,
-			$exists,
-			'dbdelta_result: ' . wp_json_encode( $dbdelta_result )
-			. ' | before_error: ' . $before_error . ' | after_dbdelta_error: ' . $after_dbdelta_error
-			. ' | last_query: ' . $after_dbdelta_query
-			. ' | commit_ok: ' . wp_json_encode( $commit_ok ) . ' | commit_error: ' . $commit_error
-		);
+		$wpdb->query( 'SELECT 1 FROM ' . AuditLog::table_name() . ' LIMIT 1' );
+
+		$this->assertSame( '', $wpdb->last_error );
 	}
 }
