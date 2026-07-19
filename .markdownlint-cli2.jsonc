@@ -1,0 +1,17 @@
+{
+    // Line-length (MD013) is deliberately disabled: this project's docs use
+    // long-line prose paragraphs rather than hard-wrapped text, per
+    // CLAUDE.md's linear/hierarchical, screen-reader-friendly style
+    // guidance — hard-wrapping would not improve non-visual readability
+    // and would just add noisy diffs.
+    "config": {
+        "MD013": false
+    },
+    "globs": [
+        "**/*.md"
+    ],
+    "ignores": [
+        "vendor/**",
+        "node_modules/**"
+    ]
+}
