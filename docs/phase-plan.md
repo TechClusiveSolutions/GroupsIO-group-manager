@@ -21,11 +21,12 @@ No code is written in this phase.
 
 ### Phase 2 — Groups.io API Client
 
-* First task: determine the real Groups.io member add/remove contract by direct trial against the test Groups.io group(s) — confirm whether add/remove operate at the parent-group level with subgroups as a parameter (as public documentation suggests) or otherwise, and confirm the actual error response shape (HTTP 400 with an error-type field vs. distinct 403/404 statuses). Update PRD sections 4.2, 7, and 9 with the confirmed contract before continuing.
-* Build the `GroupsIo_API_Client` class wrapping the confirmed add-member, remove-member, and list-members operations, using `wp_remote_request`.
-* Implement 429 handling (parse `Retry-After`, reschedule with jitter), 5xx/timeout retry via Action Scheduler's exponential backoff, an authentication-failure hard-stop with admin alert, and a not-found skip-and-continue for an invalid subgroup — mapped to whatever the confirmed error shape actually is.
+* The Groups.io contract is already confirmed by live trial against the test group (see PRD sections 4.2, 4.3, 7, and 9) — this phase implements against that confirmed contract directly, with no remaining discovery work.
+* Build the `GroupsIo_API_Client` class wrapping `directadd` (batched via repeated `subgroupid` fields) and `removemember` (one `member_info_id` per call, looped client-side for multi-subgroup removal), plus `getgroup`/`getsubgroups`/`getmembers` for lookups, using `wp_remote_request`.
+* Build the subgroup-ID cache described in PRD section 4.3 (slug-to-`group_id` mapping, refreshed on `group_not_found` and periodically via reconciliation).
+* Implement 429 handling (parse `Retry-After`, reschedule with jitter), 5xx/timeout retry via Action Scheduler's exponential backoff, and dispatch on the confirmed error `type` field: `unauthorized_error`/`inadequate_permissions` triggers the authentication hard-stop with admin alert, `group_not_found` triggers a skip-and-continue plus a cache invalidation.
 * Unit-test the client against mocked HTTP responses only — no real network calls in the unit suite.
-* Exit criterion: the client is unit-tested for all documented response/error paths, and has been manually exercised at least once against the existing test Groups.io group(s), successfully adding and removing a test member.
+* Exit criterion: the client is unit-tested for all documented response/error paths, and has been manually exercised at least once against the existing test Groups.io group(s), successfully adding to and removing from a subgroup (already demonstrated during Phase 0 verification — this exit criterion is satisfied by that trial plus the corresponding automated unit tests once written).
 
 ### Phase 3 — Join/Change Sync (Add Path)
 
@@ -37,7 +38,7 @@ No code is written in this phase.
 ### Phase 4 — Removal on Membership End
 
 * Bind expiration/cancellation to the same delta-and-sync job, respecting the configured grace period before the removal actually executes.
-* Bind GDPR/CCPA account erasure to an immediate (no grace period) removal from every `(subgroup id, email)` pair in the member's `list_subscriptions`.
+* Bind GDPR/CCPA account erasure to an immediate (no grace period) removal from every `(subgroup id, email)` pair in the member's `list_subscriptions`. Since `removemember` does not batch (PRD section 4.2), this means one `removemember` call per subgroup membership record, looped client-side, not a single call for the whole member.
 * Ensure a pending grace-period removal job is cancelled or safely no-ops if the member rejoins/renews before the grace period elapses.
 * Exit criterion: expiration and cancellation each correctly remove the member from all applicable subgroups after the grace period, a rejoin within the grace period correctly cancels the pending removal, and account erasure correctly and immediately removes the member from every subgroup they were registered under — all verified end-to-end against the test group.
 
