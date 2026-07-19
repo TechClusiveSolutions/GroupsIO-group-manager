@@ -1,4 +1,9 @@
 <?php
+/**
+ * Audit log table schema and creation.
+ *
+ * @package BITS\GroupsIOSync
+ */
 
 namespace BITS\GroupsIOSync;
 
@@ -13,6 +18,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class AuditLog {
 
+	/**
+	 * Returns the fully-prefixed audit table name.
+	 *
+	 * @return string
+	 */
 	public static function table_name(): string {
 		global $wpdb;
 
@@ -21,11 +31,18 @@ final class AuditLog {
 
 	/**
 	 * Runs on plugin activation via register_activation_hook.
+	 *
+	 * @return void
 	 */
 	public static function activate(): void {
 		self::create_table();
 	}
 
+	/**
+	 * Creates (or updates) the audit table via dbDelta.
+	 *
+	 * @return void
+	 */
 	public static function create_table(): void {
 		global $wpdb;
 

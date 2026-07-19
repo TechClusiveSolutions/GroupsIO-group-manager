@@ -1,5 +1,11 @@
 <?php
 /**
+ * Plugin bootstrap file.
+ *
+ * @package BITS\GroupsIOSync
+ */
+
+/**
  * Plugin Name:       BITS Groups.io Membership Sync
  * Plugin URI:        https://github.com/TechClusiveSolutions/GroupsIO-group-manager
  * Description:       Automates BITS Groups.io mailing list membership from Paid Memberships Pro status.

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Installs the WordPress core PHPUnit test suite and a matching WP core
-# copy into temp directories, and creates the test database. Standard
-# script long-shipped with WordPress core plugin scaffolding tools.
+# copy into temp directories, and creates the test database.
 set -eo pipefail
 
 if [ $# -lt 3 ]; then
@@ -40,14 +39,23 @@ install_wp() {
 	download https://raw.github.com/markoheijnen/wp-mysqli/master/db.php "$WP_CORE_DIR/wp-content/db.php"
 }
 
+# Fetches the full tests/phpunit tree from the wordpress-develop git
+# mirror (git clone + sparse-checkout is reliable in CI; the previous
+# svn-based approach silently produced an incomplete tree when svn
+# wasn't available on the runner).
 install_test_suite() {
-	local ABSPATH_ESC=$(echo "$WP_CORE_DIR" | sed 's/\//\\\//g')
-	local wpdb_prefix="wp_"
+	local ABSPATH_ESC
+	ABSPATH_ESC=$(echo "$WP_CORE_DIR" | sed 's/\//\\\//g')
+
+	rm -rf "$WP_TESTS_DIR"
+	git clone --depth=1 --filter=blob:none --sparse \
+		https://github.com/WordPress/wordpress-develop.git "$WP_TESTS_DIR.src"
+	( cd "$WP_TESTS_DIR.src" && git sparse-checkout set tests/phpunit )
 
 	mkdir -p "$WP_TESTS_DIR"
-	svn export --quiet https://develop.svn.wordpress.org/trunk/tests/phpunit/includes/ "$WP_TESTS_DIR/includes" --force 2>/dev/null || \
-		( mkdir -p "$WP_TESTS_DIR/includes" && download https://raw.githubusercontent.com/WordPress/wordpress-develop/trunk/tests/phpunit/includes/functions.php "$WP_TESTS_DIR/includes/functions.php" && download https://raw.githubusercontent.com/WordPress/wordpress-develop/trunk/tests/phpunit/includes/bootstrap.php "$WP_TESTS_DIR/includes/bootstrap.php" )
-	svn export --quiet https://develop.svn.wordpress.org/trunk/tests/phpunit/data/ "$WP_TESTS_DIR/data" --force 2>/dev/null || true
+	cp -r "$WP_TESTS_DIR.src/tests/phpunit/includes" "$WP_TESTS_DIR/includes"
+	cp -r "$WP_TESTS_DIR.src/tests/phpunit/data" "$WP_TESTS_DIR/data"
+	rm -rf "$WP_TESTS_DIR.src"
 
 	download https://raw.githubusercontent.com/WordPress/wordpress-develop/trunk/wp-tests-config-sample.php "$WP_TESTS_DIR/wp-tests-config.php"
 	sed -i "s:dirname( __FILE__ ) . '/src':'${ABSPATH_ESC}':" "$WP_TESTS_DIR/wp-tests-config.php"
@@ -58,7 +66,7 @@ install_test_suite() {
 }
 
 install_db() {
-	mysqladmin create "$DB_NAME" --user="$DB_USER" --password="$DB_PASS" --host="$DB_HOST" || true
+	mysqladmin create "$DB_NAME" --user="$DB_USER" --password="$DB_PASS" --host="$DB_HOST" 2>/dev/null || true
 }
 
 install_wp
