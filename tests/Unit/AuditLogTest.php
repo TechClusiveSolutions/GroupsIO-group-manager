@@ -7,6 +7,15 @@ use WP_UnitTestCase;
 
 final class AuditLogTest extends WP_UnitTestCase {
 
+	public function tear_down(): void {
+		global $wpdb;
+
+		$wpdb->query( 'DROP TABLE IF EXISTS ' . AuditLog::table_name() );
+		$wpdb->query( 'COMMIT' );
+
+		parent::tear_down();
+	}
+
 	public function test_table_name_uses_wpdb_prefix(): void {
 		global $wpdb;
 
@@ -16,33 +25,28 @@ final class AuditLogTest extends WP_UnitTestCase {
 	public function test_create_table_creates_the_audit_table(): void {
 		global $wpdb;
 
+		// MySQL 8's Atomic DDL makes CREATE TABLE participate in the
+		// ambient transaction WP_UnitTestCase wraps every test in, so an
+		// explicit COMMIT is needed for the table to actually become
+		// visible (tear_down() above cleans it up afterward, since
+		// WP_UnitTestCase's automatic rollback no longer covers it once
+		// committed).
 		AuditLog::create_table();
+		$wpdb->query( 'COMMIT' );
 
 		$table_name = AuditLog::table_name();
 		$exists     = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) );
 
-		$fresh   = mysqli_connect( DB_HOST, DB_USER, DB_PASSWORD, DB_NAME );
-		$fresh_r = mysqli_query( $fresh, "SHOW TABLES LIKE '$table_name'" );
-		$fresh_row = $fresh_r ? mysqli_fetch_row( $fresh_r ) : null;
-		$conn_id = $wpdb->get_var( 'SELECT CONNECTION_ID()' );
-		$fresh_conn_id = mysqli_query( $fresh, 'SELECT CONNECTION_ID()' );
-		$fresh_conn_id_row = $fresh_conn_id ? mysqli_fetch_row( $fresh_conn_id ) : null;
-		$autocommit = $wpdb->get_var( 'SELECT @@autocommit' );
-
-		$this->assertSame(
-			$table_name,
-			$exists,
-			'fresh conn table check: ' . wp_json_encode( $fresh_row )
-			. ' | wpdb conn_id: ' . $conn_id . ' | fresh conn_id: ' . wp_json_encode( $fresh_conn_id_row )
-			. ' | autocommit: ' . $autocommit . ' | mysqli error: ' . mysqli_error( $fresh )
-		);
+		$this->assertSame( $table_name, $exists );
 	}
 
 	public function test_create_table_is_idempotent(): void {
-		AuditLog::create_table();
-		AuditLog::create_table();
-
 		global $wpdb;
+
+		AuditLog::create_table();
+		AuditLog::create_table();
+		$wpdb->query( 'COMMIT' );
+
 		$table_name = AuditLog::table_name();
 		$exists     = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) );
 
