@@ -21,7 +21,7 @@ final class AuditLogTest extends WP_UnitTestCase {
 		$table_name = AuditLog::table_name();
 		$exists     = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) );
 
-		$this->assertSame( $table_name, $exists );
+		$this->assertSame( $table_name, $exists, 'wpdb->last_error: ' . $wpdb->last_error );
 	}
 
 	public function test_create_table_is_idempotent(): void {
