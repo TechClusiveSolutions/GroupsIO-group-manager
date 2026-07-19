@@ -38,4 +38,14 @@ final class AuditLogTest extends WP_UnitTestCase {
 
 		$this->assertSame( '', $wpdb->last_error );
 	}
+
+	public function test_activate_creates_the_audit_table(): void {
+		global $wpdb;
+
+		AuditLog::activate();
+
+		$wpdb->query( 'SELECT 1 FROM ' . AuditLog::table_name() . ' LIMIT 1' );
+
+		$this->assertSame( '', $wpdb->last_error );
+	}
 }
