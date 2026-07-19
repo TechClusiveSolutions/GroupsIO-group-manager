@@ -1,25 +1,16 @@
-# CakePHP 3
+# Composer
+/vendor/
 
-/vendor/*
-/config/app.php
+# wp-env
+/.wp-env.override.json
 
-/tmp/cache/models/*
-!/tmp/cache/models/empty
-/tmp/cache/persistent/*
-!/tmp/cache/persistent/empty
-/tmp/cache/views/*
-!/tmp/cache/views/empty
-/tmp/sessions/*
-!/tmp/sessions/empty
-/tmp/tests/*
-!/tmp/tests/empty
+# PHPUnit / coverage
+/coverage/
+.phpunit.result.cache
 
-/logs/*
-!/logs/empty
+# Node (tooling only, no runtime JS dependency for this plugin)
+/node_modules/
 
-# CakePHP 2
-
-/app/tmp/*
-/app/Config/core.php
-/app/Config/database.php
-/vendors/*
+# OS/editor cruft
+.DS_Store
+Thumbs.db

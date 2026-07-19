@@ -1,0 +1,26 @@
+name: Docs
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+
+jobs:
+  docs-lint:
+    name: Lint documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DavidAnson/markdownlint-cli2-action@v18
+        with:
+          globs: |
+            **/*.md
+            !vendor/**
+
+  # Placeholder so a required-status-check configuration referencing this
+  # workflow doesn't break for code-only PRs. Not a substitute for ci.yml.
+  code-noop:
+    name: Code (no-op)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No-op: code checks run in ci.yml"
