@@ -53,12 +53,12 @@ final class Settings {
 		'global_mandatory_groups'              => array(),
 		'grace_period_days'                    => 3,
 		'log_retention_days'                   => 90,
-		'kill_switch'                           => false,
+		'kill_switch'                          => false,
 		'mass_action_threshold_count'          => 20,
 		'mass_action_threshold_window_minutes' => 10,
 		'magic_link_rate_limit_per_email_hour' => 3,
 		'magic_link_rate_limit_per_ip_hour'    => 10,
-		'dry_run_mode'                          => true,
+		'dry_run_mode'                         => true,
 	);
 
 	/**
@@ -114,12 +114,12 @@ final class Settings {
 			'global_mandatory_groups'              => __( 'Global mandatory groups (one subgroup slug per line)', 'bits-groupsio-sync' ),
 			'grace_period_days'                    => __( 'Grace period (days)', 'bits-groupsio-sync' ),
 			'log_retention_days'                   => __( 'Log retention (days)', 'bits-groupsio-sync' ),
-			'kill_switch'                           => __( 'Kill switch (halt all sync processing)', 'bits-groupsio-sync' ),
+			'kill_switch'                          => __( 'Kill switch (halt all sync processing)', 'bits-groupsio-sync' ),
 			'mass_action_threshold_count'          => __( 'Mass-action anomaly threshold: job count', 'bits-groupsio-sync' ),
 			'mass_action_threshold_window_minutes' => __( 'Mass-action anomaly threshold: window (minutes)', 'bits-groupsio-sync' ),
 			'magic_link_rate_limit_per_email_hour' => __( 'Magic link rate limit: per email address (per hour)', 'bits-groupsio-sync' ),
 			'magic_link_rate_limit_per_ip_hour'    => __( 'Magic link rate limit: per IP address (per hour)', 'bits-groupsio-sync' ),
-			'dry_run_mode'                          => __( 'Reconciliation dry-run mode', 'bits-groupsio-sync' ),
+			'dry_run_mode'                         => __( 'Reconciliation dry-run mode', 'bits-groupsio-sync' ),
 		);
 
 		foreach ( $fields as $key => $label ) {
@@ -195,9 +195,11 @@ final class Settings {
 
 	/**
 	 * Sanitizes and clamps submitted settings. Registered as this
-	 * setting's sanitize_callback.
+	 * setting's sanitize_callback, which WordPress may call with
+	 * non-array input in edge cases, hence the runtime is_array() check
+	 * despite the array-shaped happy path.
 	 *
-	 * @param array<string, mixed> $input Raw submitted values.
+	 * @param mixed $input Raw submitted value, expected to be an array.
 	 * @return array<string, mixed>
 	 */
 	public static function sanitize( $input ): array {

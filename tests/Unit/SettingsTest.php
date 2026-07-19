@@ -70,4 +70,75 @@ final class SettingsTest extends WP_UnitTestCase {
 
 		$this->assertSame( 7, Settings::get( 'grace_period_days' ) );
 	}
+
+	public function test_render_field_outputs_a_number_input_with_current_value(): void {
+		update_option( Settings::OPTION_NAME, array( 'grace_period_days' => 5 ) );
+
+		ob_start();
+		Settings::render_field( array( 'key' => 'grace_period_days' ) );
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( '<input', $output );
+		$this->assertStringContainsString( 'type="number"', $output );
+		$this->assertStringContainsString( 'value="5"', $output );
+		$this->assertStringContainsString( 'min="0"', $output );
+		$this->assertStringContainsString( 'max="30"', $output );
+	}
+
+	public function test_render_field_outputs_a_checked_checkbox(): void {
+		update_option( Settings::OPTION_NAME, array( 'kill_switch' => true ) );
+
+		ob_start();
+		Settings::render_field( array( 'key' => 'kill_switch' ) );
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'type="checkbox"', $output );
+		$this->assertStringContainsString( 'checked', $output );
+	}
+
+	public function test_render_field_outputs_a_textarea_with_lines(): void {
+		update_option( Settings::OPTION_NAME, array( 'global_mandatory_groups' => array( 'announcements', 'general' ) ) );
+
+		ob_start();
+		Settings::render_field( array( 'key' => 'global_mandatory_groups' ) );
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( '<textarea', $output );
+		$this->assertStringContainsString( "announcements\ngeneral", $output );
+	}
+
+	public function test_render_page_outputs_a_form_for_an_administrator(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		Settings::register_setting();
+
+		ob_start();
+		Settings::render_page();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( '<form', $output );
+		$this->assertStringContainsString( 'BITS Groups.io Sync', $output );
+	}
+
+	public function test_render_page_outputs_nothing_for_a_non_administrator(): void {
+		$subscriber_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		wp_set_current_user( $subscriber_id );
+
+		ob_start();
+		Settings::render_page();
+		$output = ob_get_clean();
+
+		$this->assertSame( '', $output );
+	}
+
+	public function test_add_menu_page_and_register_setting_run_without_error(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		Settings::add_menu_page();
+		Settings::register_setting();
+
+		$this->assertTrue( true );
+	}
 }

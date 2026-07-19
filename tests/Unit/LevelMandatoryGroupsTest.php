@@ -49,4 +49,23 @@ final class LevelMandatoryGroupsTest extends WP_UnitTestCase {
 
 		unset( $_POST['bits_groupsio_level_mandatory_groups'] );
 	}
+
+	public function test_render_field_outputs_a_labeled_textarea_with_current_value(): void {
+		$level_id = 7;
+		update_option( LevelMandatoryGroups::option_key( $level_id ), array( 'premium-only' ) );
+
+		ob_start();
+		LevelMandatoryGroups::render_field( $level_id );
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( '<textarea', $output );
+		$this->assertStringContainsString( '<label for=', $output );
+		$this->assertStringContainsString( 'premium-only', $output );
+	}
+
+	public function test_register_runs_without_error(): void {
+		LevelMandatoryGroups::register();
+
+		$this->assertTrue( true );
+	}
 }
