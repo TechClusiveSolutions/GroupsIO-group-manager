@@ -44,9 +44,6 @@ install_wp() {
 # svn-based approach silently produced an incomplete tree when svn
 # wasn't available on the runner).
 install_test_suite() {
-	local ABSPATH_ESC
-	ABSPATH_ESC=$(echo "$WP_CORE_DIR" | sed 's/\//\\\//g')
-
 	rm -rf "$WP_TESTS_DIR"
 	git clone --depth=1 --filter=blob:none --sparse \
 		https://github.com/WordPress/wordpress-develop.git "$WP_TESTS_DIR.src"
@@ -62,7 +59,7 @@ install_test_suite() {
 	# to pattern-match against.
 	cat > "$WP_TESTS_DIR/wp-tests-config.php" <<PHP
 <?php
-define( 'ABSPATH', '${ABSPATH_ESC}/' );
+define( 'ABSPATH', '${WP_CORE_DIR}/' );
 define( 'DB_NAME', '${DB_NAME}' );
 define( 'DB_USER', '${DB_USER}' );
 define( 'DB_PASSWORD', '${DB_PASS}' );
