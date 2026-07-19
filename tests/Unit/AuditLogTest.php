@@ -33,9 +33,12 @@ final class AuditLogTest extends WP_UnitTestCase {
 			KEY user_id (user_id),
 			KEY created_at (created_at)
 		) $charset_collate;";
-		$result          = dbDelta( $sql );
+		$result = dbDelta( $sql );
 
-		$exists    = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) );
+		$raw_query_result = $wpdb->query( str_replace( $table_name, $table_name . '_raw', $sql ) );
+		$raw_error        = $wpdb->last_error;
+
+		$exists     = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) );
 		$all_tables = $wpdb->get_col( 'SHOW TABLES' );
 
 		$this->assertSame(
@@ -43,6 +46,7 @@ final class AuditLogTest extends WP_UnitTestCase {
 			$exists,
 			'wpdb->last_error: ' . $wpdb->last_error . ' | dbDelta result: ' . wp_json_encode( $result )
 			. ' | dbname: ' . DB_NAME . ' | all tables: ' . wp_json_encode( $all_tables )
+			. ' | raw query result: ' . wp_json_encode( $raw_query_result ) . ' | raw error: ' . $raw_error
 		);
 	}
 
