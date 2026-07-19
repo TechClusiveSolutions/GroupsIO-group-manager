@@ -42,7 +42,10 @@ final class Plugin {
 	 * Private constructor; use instance() instead.
 	 */
 	private function __construct() {
-		// Subsystems (Groups.io client, sync engine, admin settings, magic
-		// link, audit log reader) are registered here as later phases add them.
+		Settings::register();
+		LevelMandatoryGroups::register();
+
+		// Remaining subsystems (Groups.io client, sync engine, magic link,
+		// audit log reader) are registered here as later phases add them.
 	}
 }
