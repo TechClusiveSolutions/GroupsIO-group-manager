@@ -57,12 +57,25 @@ install_test_suite() {
 	cp -r "$WP_TESTS_DIR.src/tests/phpunit/data" "$WP_TESTS_DIR/data"
 	rm -rf "$WP_TESTS_DIR.src"
 
-	download https://raw.githubusercontent.com/WordPress/wordpress-develop/trunk/wp-tests-config-sample.php "$WP_TESTS_DIR/wp-tests-config.php"
-	sed -i "s:dirname( __FILE__ ) . '/src':'${ABSPATH_ESC}':" "$WP_TESTS_DIR/wp-tests-config.php"
-	sed -i "s/youremptytestdbnamehere/$DB_NAME/" "$WP_TESTS_DIR/wp-tests-config.php"
-	sed -i "s/yourusernamehere/$DB_USER/" "$WP_TESTS_DIR/wp-tests-config.php"
-	sed -i "s/yourpasswordhere/$DB_PASS/" "$WP_TESTS_DIR/wp-tests-config.php"
-	sed -i "s|localhost|${DB_HOST}|" "$WP_TESTS_DIR/wp-tests-config.php"
+	# Written directly rather than sed-patched from WordPress's sample
+	# config, since that sample's exact format is not a stable contract
+	# to pattern-match against.
+	cat > "$WP_TESTS_DIR/wp-tests-config.php" <<PHP
+<?php
+define( 'ABSPATH', '${ABSPATH_ESC}/' );
+define( 'DB_NAME', '${DB_NAME}' );
+define( 'DB_USER', '${DB_USER}' );
+define( 'DB_PASSWORD', '${DB_PASS}' );
+define( 'DB_HOST', '${DB_HOST}' );
+define( 'DB_CHARSET', 'utf8' );
+define( 'DB_COLLATE', '' );
+\$table_prefix = 'wptests_';
+define( 'WP_TESTS_DOMAIN', 'example.org' );
+define( 'WP_TESTS_EMAIL', 'admin@example.org' );
+define( 'WP_TESTS_TITLE', 'Test Blog' );
+define( 'WP_PHP_BINARY', 'php' );
+define( 'WPLANG', '' );
+PHP
 }
 
 install_db() {

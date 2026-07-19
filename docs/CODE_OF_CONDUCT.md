@@ -33,7 +33,7 @@ This Code of Conduct applies within all project spaces (issues, pull requests, d
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainers at info@TechClusiveSolutions.com. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainers at [info@TechClusiveSolutions.com](mailto:info@TechClusiveSolutions.com). All complaints will be reviewed and investigated promptly and fairly.
 
 ## Attribution
 
