@@ -35,12 +35,14 @@ final class AuditLogTest extends WP_UnitTestCase {
 		) $charset_collate;";
 		$result          = dbDelta( $sql );
 
-		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) );
+		$exists    = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) );
+		$all_tables = $wpdb->get_col( 'SHOW TABLES' );
 
 		$this->assertSame(
 			$table_name,
 			$exists,
-			'wpdb->last_error: ' . $wpdb->last_error . ' | dbDelta result: ' . wp_json_encode( $result ) . ' | sql: ' . $sql
+			'wpdb->last_error: ' . $wpdb->last_error . ' | dbDelta result: ' . wp_json_encode( $result )
+			. ' | dbname: ' . DB_NAME . ' | all tables: ' . wp_json_encode( $all_tables )
 		);
 	}
 
