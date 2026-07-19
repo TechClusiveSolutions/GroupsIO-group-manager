@@ -8,7 +8,7 @@ Milestones are deliverable-based, not date-based. Each phase below is defined by
 
 No code is written in this phase.
 
-* Exit criterion: the finalized PRD (`PRD.md`), this phase plan, the security document, and the testing standard document are all written and confirmed section by section with the primary contributor. The open items listed in PRD section 9 are resolved: Groups.io authentication mechanism and endpoint contracts are verified against `Groups.io API Reference.pdf`, and WordPress.com Business Plan hosting constraints are confirmed to support the design.
+* Exit criterion: **met**. The finalized PRD (`PRD.md`), this phase plan, the security document, and the testing standard document are all written and confirmed section by section with the primary contributor. All open items listed in PRD section 9 are resolved: Groups.io authentication and the add/remove/lookup contract are verified by live trial against the test group, PMPro's membership-level-change hook is confirmed, and WordPress.com Business Plan hosting constraints are confirmed against WordPress.com's own documentation.
 
 ### Phase 1 — Foundation & Plugin Scaffold
 
