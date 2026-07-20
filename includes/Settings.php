@@ -176,7 +176,7 @@ final class Settings {
 				esc_attr( $field_id ),
 				esc_attr( $name ),
 				esc_attr( $desc_id ),
-				$autofocus,
+				esc_attr( $autofocus ),
 				esc_textarea( implode( "\n", (array) $value ) )
 			);
 			self::render_description( $desc_id, $description );
@@ -189,7 +189,7 @@ final class Settings {
 				esc_attr( $field_id ),
 				esc_attr( $name ),
 				esc_attr( $desc_id ),
-				$autofocus,
+				esc_attr( $autofocus ),
 				checked( (bool) $value, true, false )
 			);
 			self::render_description( $desc_id, $description );
@@ -204,7 +204,7 @@ final class Settings {
 			esc_attr( (string) ( self::BOUNDS[ $key ]['min'] ?? 0 ) ),
 			esc_attr( (string) ( self::BOUNDS[ $key ]['max'] ?? PHP_INT_MAX ) ),
 			esc_attr( $desc_id ),
-			$autofocus
+			esc_attr( $autofocus )
 		);
 		self::render_description( $desc_id, $description );
 	}
