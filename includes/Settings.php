@@ -49,6 +49,18 @@ final class Settings {
 		),
 	);
 
+	private const DESCRIPTIONS = array(
+		'global_mandatory_groups'              => 'Subgroups every member is enrolled in regardless of membership level, one subgroup slug per line.',
+		'grace_period_days'                    => 'Number of days a lapsed member keeps their Groups.io subgroup access after their PMPro membership ends, before automatic removal runs. Unit: days.',
+		'log_retention_days'                   => 'Number of days sync audit log entries are kept before being purged. Unit: days.',
+		'kill_switch'                          => 'When checked, halts all sync processing (adds, removals, and reconciliation) until unchecked.',
+		'mass_action_threshold_count'          => 'Number of membership changes within the time window below that triggers a mass-action anomaly alert instead of processing normally. Unit: job count.',
+		'mass_action_threshold_window_minutes' => 'Time window over which the job-count threshold above is measured. Unit: minutes.',
+		'magic_link_rate_limit_per_email_hour' => 'Maximum magic-link requests allowed for a single email address within one hour before further requests are blocked.',
+		'magic_link_rate_limit_per_ip_hour'    => 'Maximum magic-link requests allowed from a single IP address within one hour before further requests are blocked.',
+		'dry_run_mode'                         => 'When checked, reconciliation runs compute and log intended changes without actually adding or removing anyone on Groups.io.',
+	);
+
 	private const DEFAULTS = array(
 		'global_mandatory_groups'              => array(),
 		'grace_period_days'                    => 3,
@@ -122,57 +134,98 @@ final class Settings {
 			'dry_run_mode'                         => __( 'Reconciliation dry-run mode', 'bits-groupsio-sync' ),
 		);
 
+		$first = true;
+
 		foreach ( $fields as $key => $label ) {
+			$field_id = self::OPTION_NAME . '_' . $key;
+
 			add_settings_field(
 				$key,
-				$label,
+				sprintf( '<label for="%1$s">%2$s</label>', esc_attr( $field_id ), esc_html( $label ) ),
 				array( self::class, 'render_field' ),
 				'bits-groupsio-sync',
 				'bits_groupsio_sync_main',
-				array( 'key' => $key )
+				array(
+					'key'   => $key,
+					'first' => $first,
+				)
 			);
+
+			$first = false;
 		}
 	}
 
 	/**
 	 * Renders a single settings field. Callback for add_settings_field().
 	 *
-	 * @param array<string, string> $args Field arguments, contains 'key'.
+	 * @param array<string, mixed> $args Field arguments, contains 'key' and 'first'.
 	 * @return void
 	 */
 	public static function render_field( array $args ): void {
-		$key      = $args['key'];
-		$value    = self::get( $key );
-		$field_id = self::OPTION_NAME . '_' . $key;
-		$name     = self::OPTION_NAME . '[' . $key . ']';
+		$key         = $args['key'];
+		$value       = self::get( $key );
+		$field_id    = self::OPTION_NAME . '_' . $key;
+		$name        = self::OPTION_NAME . '[' . $key . ']';
+		$desc_id     = $field_id . '_description';
+		$autofocus   = ! empty( $args['first'] ) ? ' autofocus' : '';
+		$description = self::DESCRIPTIONS[ $key ] ?? '';
 
 		if ( 'global_mandatory_groups' === $key ) {
 			printf(
-				'<textarea id="%1$s" name="%2$s" rows="5" cols="40">%3$s</textarea>',
+				'<textarea id="%1$s" name="%2$s" rows="5" cols="40" aria-describedby="%3$s"%4$s>%5$s</textarea>',
 				esc_attr( $field_id ),
 				esc_attr( $name ),
+				esc_attr( $desc_id ),
+				$autofocus,
 				esc_textarea( implode( "\n", (array) $value ) )
 			);
+			self::render_description( $desc_id, $description );
 			return;
 		}
 
 		if ( in_array( $key, array( 'kill_switch', 'dry_run_mode' ), true ) ) {
 			printf(
-				'<input type="checkbox" id="%1$s" name="%2$s" value="1" %3$s />',
+				'<input type="checkbox" id="%1$s" name="%2$s" value="1" aria-describedby="%3$s"%4$s %5$s />',
 				esc_attr( $field_id ),
 				esc_attr( $name ),
+				esc_attr( $desc_id ),
+				$autofocus,
 				checked( (bool) $value, true, false )
 			);
+			self::render_description( $desc_id, $description );
 			return;
 		}
 
 		printf(
-			'<input type="number" id="%1$s" name="%2$s" value="%3$s" min="%4$s" max="%5$s" />',
+			'<input type="number" id="%1$s" name="%2$s" value="%3$s" min="%4$s" max="%5$s" aria-describedby="%6$s"%7$s />',
 			esc_attr( $field_id ),
 			esc_attr( $name ),
 			esc_attr( (string) $value ),
 			esc_attr( (string) ( self::BOUNDS[ $key ]['min'] ?? 0 ) ),
-			esc_attr( (string) ( self::BOUNDS[ $key ]['max'] ?? PHP_INT_MAX ) )
+			esc_attr( (string) ( self::BOUNDS[ $key ]['max'] ?? PHP_INT_MAX ) ),
+			esc_attr( $desc_id ),
+			$autofocus
+		);
+		self::render_description( $desc_id, $description );
+	}
+
+	/**
+	 * Renders a field's helper description, visible and exposed to
+	 * assistive tech via the aria-describedby the control already points at.
+	 *
+	 * @param string $desc_id     Element id matching the control's aria-describedby.
+	 * @param string $description Human-readable helper text.
+	 * @return void
+	 */
+	private static function render_description( string $desc_id, string $description ): void {
+		if ( '' === $description ) {
+			return;
+		}
+
+		printf(
+			'<p class="description" id="%1$s">%2$s</p>',
+			esc_attr( $desc_id ),
+			esc_html( $description )
 		);
 	}
 
@@ -189,7 +242,19 @@ final class Settings {
 		echo '<div class="wrap"><h1>' . esc_html__( 'BITS Groups.io Sync', 'bits-groupsio-sync' ) . '</h1><form action="options.php" method="post">';
 		settings_fields( 'bits_groupsio_sync' );
 		do_settings_sections( 'bits-groupsio-sync' );
-		submit_button();
+		submit_button( __( 'Save Changes', 'bits-groupsio-sync' ), 'primary', 'submit', false );
+		echo ' ';
+		printf(
+			'<input type="reset" class="button" value="%s" />',
+			esc_attr__( 'Reset', 'bits-groupsio-sync' )
+		);
+		echo ' ';
+		printf(
+			'<button type="button" class="button" disabled aria-describedby="bits_groupsio_sync_dry_run_stub_description">%s</button>' .
+			'<p class="description" id="bits_groupsio_sync_dry_run_stub_description">%s</p>',
+			esc_html__( 'Run Dry-Run Now', 'bits-groupsio-sync' ),
+			esc_html__( 'Not yet available: the reconciliation engine has not been built yet (Phase 5).', 'bits-groupsio-sync' )
+		);
 		echo '</form></div>';
 	}
 
@@ -241,12 +306,17 @@ final class Settings {
 
 	/**
 	 * Splits a textarea's raw value into a trimmed, non-empty line array.
+	 * Guards against array input (rather than casting it to the literal
+	 * string "Array" and silently corrupting the stored option) by
+	 * treating each array element as its own line.
 	 *
 	 * @param mixed $raw Raw textarea value.
 	 * @return array<int, string>
 	 */
 	public static function sanitize_lines( $raw ): array {
-		$lines = preg_split( '/[\r\n]+/', (string) $raw );
+		$raw = is_array( $raw ) ? implode( "\n", array_map( 'strval', $raw ) ) : (string) $raw;
+
+		$lines = preg_split( '/[\r\n]+/', $raw );
 		$lines = array_map( 'trim', $lines );
 		$lines = array_map( 'sanitize_text_field', $lines );
 

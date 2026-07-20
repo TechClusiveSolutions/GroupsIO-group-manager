@@ -19,6 +19,13 @@ final class SettingsTest extends WP_UnitTestCase {
 		$this->assertSame( 15, Settings::clamp_int( 15, 0, 30 ) );
 	}
 
+	public function test_sanitize_lines_handles_array_input_without_corrupting_it(): void {
+		$this->assertSame(
+			array( 'announcements', 'general' ),
+			Settings::sanitize_lines( array( 'announcements', 'general' ) )
+		);
+	}
+
 	public function test_sanitize_lines_trims_and_drops_empty_lines(): void {
 		$raw = "  psychology \n\nsociology\n  \nresearch";
 
@@ -121,6 +128,35 @@ final class SettingsTest extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'BITS Groups.io Sync', $output );
 	}
 
+	public function test_render_page_outputs_a_reset_button(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		Settings::register_setting();
+
+		ob_start();
+		Settings::render_page();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'type="reset"', $output );
+	}
+
+	public function test_render_page_outputs_a_disabled_dry_run_stub_with_description(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		Settings::register_setting();
+
+		ob_start();
+		Settings::render_page();
+		$output = ob_get_clean();
+
+		$this->assertMatchesRegularExpression( '/<button[^>]*disabled[^>]*aria-describedby="bits_groupsio_sync_dry_run_stub_description"/', $output );
+		$this->assertStringContainsString( 'Run Dry-Run Now', $output );
+		$this->assertStringContainsString( 'id="bits_groupsio_sync_dry_run_stub_description"', $output );
+		$this->assertStringContainsString( 'Phase 5', $output );
+	}
+
 	public function test_render_page_outputs_nothing_for_a_non_administrator(): void {
 		$subscriber_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
 		wp_set_current_user( $subscriber_id );
@@ -130,6 +166,39 @@ final class SettingsTest extends WP_UnitTestCase {
 		$output = ob_get_clean();
 
 		$this->assertSame( '', $output );
+	}
+
+	public function test_render_field_associates_label_via_aria_describedby_and_description(): void {
+		ob_start();
+		Settings::render_field( array( 'key' => 'grace_period_days' ) );
+		$output = ob_get_clean();
+
+		$this->assertMatchesRegularExpression( '/aria-describedby="bits_groupsio_sync_settings_grace_period_days_description"/', $output );
+		$this->assertStringContainsString( 'class="description" id="bits_groupsio_sync_settings_grace_period_days_description"', $output );
+		$this->assertStringContainsString( 'days', $output );
+	}
+
+	public function test_render_field_adds_autofocus_only_to_first_field(): void {
+		ob_start();
+		Settings::render_field( array( 'key' => 'grace_period_days', 'first' => true ) );
+		$first_output = ob_get_clean();
+
+		ob_start();
+		Settings::render_field( array( 'key' => 'grace_period_days', 'first' => false ) );
+		$other_output = ob_get_clean();
+
+		$this->assertStringContainsString( 'autofocus', $first_output );
+		$this->assertStringNotContainsString( 'autofocus', $other_output );
+	}
+
+	public function test_register_setting_wraps_field_labels_in_label_for(): void {
+		global $wp_settings_fields;
+
+		Settings::register_setting();
+
+		$field = $wp_settings_fields['bits-groupsio-sync']['bits_groupsio_sync_main']['grace_period_days'];
+
+		$this->assertStringContainsString( '<label for="bits_groupsio_sync_settings_grace_period_days">', $field['title'] );
 	}
 
 	public function test_add_menu_page_and_register_setting_run_without_error(): void {
