@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.changelog.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,3 +95,38 @@ jobs:
 
           tag="v${{ steps.changelog.outputs.version }}"
           gh release create "$tag" --title "$tag" --notes-file /tmp/notes.md
+
+  sync-tag-to-dev:
+    name: Sync release tag back into dev
+    needs: tag-and-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Create sync branch, open PR, enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          tag="v${{ needs.tag-and-release.outputs.version }}"
+          branch="infra/sync-main-${tag}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git push origin "$branch"
+
+          pr_url=$(gh pr create \
+            --base dev \
+            --head "$branch" \
+            --title "Sync $tag back into dev" \
+            --body "Automated bookkeeping merge so the $tag release commit on main is an ancestor of dev's history. No content changes. See app/docs/ci.md section 5.")
+
+          gh pr merge "$pr_url" --merge --auto --delete-branch

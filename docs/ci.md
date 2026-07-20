@@ -43,6 +43,13 @@ CI is split across two GitHub Actions workflow files:
 * If the topmost `CHANGELOG.md` section's version is not newer than the latest tag (e.g., a `dev`-to-`main` merge that didn't include a release-prep step), the workflow fails loudly rather than silently skipping, since that indicates the release-prep step was missed.
 * Major version bumps are not automatic — they only happen via an explicit release-branch cut at a defined phase boundary, per `CLAUDE.md`.
 
+### 5. Syncing the Release Tag Back to `dev`
+
+After tagging and publishing a release, `main` has a commit (the release merge commit) that `dev` does not, since `dev`'s own tip is one of that commit's two parents, not the commit itself. Left alone, this means the release tag is never an ancestor of `dev`'s history — `git describe --tags` run from `dev` would never find it.
+
+* A second job in `release.yml`, gated on the tag-and-release job succeeding, handles this automatically, with no manual or approval step: it creates a short-lived branch from the just-tagged `main` commit (named `infra/sync-main-vX.Y.Z`, so it passes `branch-name-lint` and is exempt from `changelog-check` — it's pure bookkeeping, not new work), opens a pull request with `dev` as the base, and enables GitHub's native auto-merge (a real merge, not a squash, so the tagged commit becomes a true ancestor of `dev`) with branch deletion on completion.
+* This still flows through a real pull request against a protected branch (satisfying `CLAUDE.md`'s "no direct pushes... under any circumstance"), and still waits for `dev`'s required status checks to pass before merging (via GitHub's auto-merge, not a busy-wait in the workflow) — it only skips the usual explicit human go-ahead in conversation, since the primary contributor has given blanket approval for this specific, structurally risk-free, content-identical sync-back operation ahead of time.
+
 ### 5. What CI Does Not Cover
 
 * Screen reader / accessibility verification is manual (per the Testing Standard document, section 6) and is not a CI job.
