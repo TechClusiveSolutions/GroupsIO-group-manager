@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  tag-and-release:
+    name: Tag and publish release from CHANGELOG.md
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract topmost dated CHANGELOG.md section
+        id: changelog
+        run: |
+          set -euo pipefail
+
+          # Grab the first "## [X.Y.Z] - YYYY-MM-DD" heading and everything
+          # up to (not including) the next "## [" heading.
+          awk '
+            /^## \[[0-9]+\.[0-9]+\.[0-9]+\]/ {
+              if (found) { exit }
+              found = 1
+              print
+              next
+            }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/section.md
+
+          if [ ! -s /tmp/section.md ]; then
+            echo "::error::No dated release section found at the top of CHANGELOG.md."
+            exit 1
+          fi
+
+          heading=$(head -n1 /tmp/section.md)
+          version=$(echo "$heading" | sed -E 's/^## \[([0-9]+\.[0-9]+\.[0-9]+)\].*/\1/')
+
+          if [ -z "$version" ]; then
+            echo "::error::Could not parse a version number from heading: $heading"
+            exit 1
+          fi
+
+          # Notes body: drop the heading line itself.
+          tail -n +2 /tmp/section.md > /tmp/notes.md
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Extracted version: $version"
+
+      - name: Sanity-check version is newer than the latest tag
+        run: |
+          set -euo pipefail
+
+          new_tag="v${{ steps.changelog.outputs.version }}"
+          latest_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+
+          if [ -z "$latest_tag" ]; then
+            echo "No existing tags; $new_tag will be the first release."
+            exit 0
+          fi
+
+          echo "Latest tag: $latest_tag; new tag: $new_tag"
+
+          if [ "$(printf '%s\n%s\n' "$latest_tag" "$new_tag" | sort -V | tail -n1)" != "$new_tag" ] || [ "$latest_tag" = "$new_tag" ]; then
+            echo "::error::CHANGELOG.md's topmost version ($new_tag) is not newer than the latest tag ($latest_tag). The release-prep step (renaming [Unreleased] to a dated version) was likely missed on dev before this merge."
+            exit 1
+          fi
+
+      - name: Create and push tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          tag="v${{ steps.changelog.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "Release $tag"
+          git push origin "$tag"
+
+      - name: Publish GitHub Release from CHANGELOG.md notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          tag="v${{ steps.changelog.outputs.version }}"
+          gh release create "$tag" --title "$tag" --notes-file /tmp/notes.md

@@ -33,8 +33,14 @@ CI is split across two GitHub Actions workflow files:
 
 ### 4. Version Bumping and Releases
 
-* On a merge from `dev` to `main`, CI computes the version bump level from the GitHub issue type(s) closed by the merged work (feature-type issues bump minor, bug-type issues bump patch), per `CLAUDE.md`'s branching strategy.
-* Every tag produced by this process triggers a GitHub Release with generated release notes.
+`CHANGELOG.md` (at the `app/` repository root, "Keep a Changelog" format) is the single source of truth for version history. The release process reads it rather than deriving a version from issue types, branch history, or commit messages.
+
+* **Ongoing requirement**: every pull request merged into `dev` from a `feature/*` or `bug/*` branch must include an update to `CHANGELOG.md`'s `## [Unreleased]` section (under the appropriate "Keep a Changelog" subheading — `### Added`, `### Changed`, `### Fixed`, `### Security`, etc.). Enforced by a required CI check (`changelog-check` in `ci.yml`) that fails the PR if `CHANGELOG.md` isn't part of its diff.
+* **Exemption**: pull requests from `infra/*` or `docs/*` branches are exempt from the `changelog-check` gate. Infrastructure/tooling work and documentation-only changes are not user-facing plugin behavior and are not tracked in version history.
+* **Branch naming convention** (per `CLAUDE.md`'s branching strategy and `CONTRIBUTING.md`): `feature/*` for feature work, `bug/*` for bug fixes, `docs/*` for documentation-only changes, `infra/*` for tooling/CI/infrastructure work not itself part of the plugin's shipped behavior. A CI check (`branch-name-lint` in `ci.yml`) validates that a PR's head branch matches one of these four prefixes.
+* **Cutting a release**: preparing a `dev`-to-`main` release pull request includes, as part of that PR (committed to `dev` first, like any other change), renaming `CHANGELOG.md`'s `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD` and adding a fresh, empty `## [Unreleased]` heading above it. The version number is a deliberate, human-confirmed decision made at this point — not computed automatically — consistent with this project's merge-authorization model (the primary contributor's explicit go-ahead in conversation, per section 2 above).
+* **Release automation**: `release.yml` triggers on the `pull_request` event, `closed` type, filtered to pull requests where `base` is `main` and `merged` is `true`. It reads `CHANGELOG.md` at the merge commit, extracts the topmost dated `## [X.Y.Z] - YYYY-MM-DD` section (skipping the now-empty `## [Unreleased]` above it), sanity-checks that version is newer than the latest existing `vX.Y.Z` git tag, then creates and pushes an annotated tag and runs `gh release create <tag> --notes-file` using that section's own content as the release notes body — no auto-generated notes, no bump arithmetic.
+* If the topmost `CHANGELOG.md` section's version is not newer than the latest tag (e.g., a `dev`-to-`main` merge that didn't include a release-prep step), the workflow fails loudly rather than silently skipping, since that indicates the release-prep step was missed.
 * Major version bumps are not automatic — they only happen via an explicit release-branch cut at a defined phase boundary, per `CLAUDE.md`.
 
 ### 5. What CI Does Not Cover
