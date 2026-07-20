@@ -45,3 +45,8 @@ Resolved (deferred from the Security document, section 4): the nightly reconcili
 
 * Local: `composer test` runs the full PHPUnit suite (unit only by default; a separate `composer test:integration` runs the integration suite against the test Groups.io group, requiring local environment variables for the test credential).
 * CI: both suites run on every pull request, per the Testing Standard document; coverage is computed from the unit suite only and gated at 80%.
+
+### 10. Branch Naming and Changelog Discipline
+
+* Every branch cut from `dev` uses one of four prefixes: `feature/*` (feature work), `bug/*` (bug fixes), `docs/*` (documentation-only changes), `infra/*` (tooling, CI, and other infrastructure work that is not itself part of the plugin's shipped behavior). CI (`branch-name-lint`) validates this on every pull request.
+* `CHANGELOG.md` at the `app/` repository root (`Keep a Changelog` format) is the source of truth for version history. Every pull request from a `feature/*` or `bug/*` branch must update its `## [Unreleased]` section under the appropriate subheading; CI (`changelog-check`) enforces this. `infra/*` and `docs/*` branches are exempt (see `ci.md` section 4 for the full release process this feeds).
