@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+
+jobs:
+  branch-name-lint:
+    name: Branch name check
+    if: github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch prefix
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          case "$HEAD_REF" in
+            feature/*|bug/*|docs/*|infra/*)
+              echo "Branch '$HEAD_REF' matches an allowed prefix."
+              ;;
+            *)
+              echo "::error::Branch '$HEAD_REF' does not match feature/*, bug/*, docs/*, or infra/*."
+              exit 1
+              ;;
+          esac
+
+  changelog-check:
+    name: Changelog updated
+    if: >-
+      github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'dev' &&
+      !startsWith(github.head_ref, 'infra/') && !startsWith(github.head_ref, 'docs/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require CHANGELOG.md in the diff
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          if ! git diff --name-only "origin/${{ github.base_ref }}"...HEAD | grep -qx 'CHANGELOG.md'; then
+            echo "::error::This branch must update CHANGELOG.md's [Unreleased] section (see CONTRIBUTING.md)."
+            exit 1
+          fi
+
+  docs-lint:
+    name: Lint documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DavidAnson/markdownlint-cli2-action@v18
+        with:
+          globs: |
+            **/*.md
+            !vendor/**
+
+  lint:
+    name: PHP lint (WPCS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.0"
+          tools: composer
+      - run: composer install --no-progress --prefer-dist
+      - run: composer lint
+
+  static-analysis:
+    name: Static analysis (PHPStan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.0"
+          tools: composer
+      - run: composer install --no-progress --prefer-dist
+      - run: composer analyse
+
+  unit-tests:
+    name: Unit tests (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ["8.0"]
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: true
+          MYSQL_DATABASE: wordpress_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer
+          coverage: xdebug
+      - run: composer install --no-progress --prefer-dist
+      - name: Install WordPress test suite
+        run: bash bin/install-wp-tests.sh wordpress_test root '' 127.0.0.1 latest
+      - name: Run PHPUnit with coverage
+        run: vendor/bin/phpunit --coverage-text --coverage-clover=coverage.xml
+      - name: Enforce 80% coverage gate
+        run: |
+          php -r '
+          $xml = simplexml_load_file("coverage.xml");
+          $metrics = $xml->project->metrics;
+          $covered = (int) $metrics["coveredstatements"];
+          $total = (int) $metrics["statements"];
+          $pct = $total > 0 ? ($covered / $total) * 100 : 100;
+          printf("Line coverage: %.2f%%\n", $pct);
+          if ($pct < 80) {
+              fwrite(STDERR, "Coverage below 80% gate\n");
+              exit(1);
+          }
+          '

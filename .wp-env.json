@@ -1,0 +1,21 @@
+{
+    "core": null,
+    "phpVersion": "8.0",
+    "plugins": [
+        "."
+    ],
+    "config": {
+        "GROUPS_IO_API_KEY": "fake-local-dev-key-not-real",
+        "GROUPS_IO_PARENT_GROUP": "bits-local-dev",
+        "GROUPS_IO_NOTIFICATION_EMAIL": "admin@example.test"
+    },
+    "env": {
+        "tests": {
+            "config": {
+                "GROUPS_IO_API_KEY": "fake-test-key-not-real",
+                "GROUPS_IO_PARENT_GROUP": "bits-test",
+                "GROUPS_IO_NOTIFICATION_EMAIL": "admin@example.test"
+            }
+        }
+    }
+}
