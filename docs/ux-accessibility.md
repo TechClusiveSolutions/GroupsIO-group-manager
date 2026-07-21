@@ -22,8 +22,8 @@ This document specifies the accessibility standard this project must meet, which
 
 ### 4. Verification Process
 
-* Default local verification: a screen reader pass by the primary contributor, using their own day-to-day screen reader as the default local verification tool, on any change touching a UI surface listed in section 3.
-* Fuller matrix pass: before merging any such change to `dev`, and mandatorily as part of Phase 8's exit criterion, a broader screen reader matrix (e.g., NVDA, JAWS, VoiceOver) is run. Resourcing for who runs the non-default screen readers in that matrix is to be determined closer to Phase 8.
+* Default local verification: a screen reader pass by the primary contributor, using their own day-to-day screen reader as the default local verification tool, on any change touching a UI surface listed in section 3. This local pass is what's required before merging such a change to `dev` — per `docs/definition-of-done.md` section 3, the fuller matrix pass below is reserved for the Phase 8 gate, not every individual feature issue.
+* Fuller matrix pass: mandatorily as part of Phase 8's exit criterion (not before every individual `dev` merge), a broader screen reader matrix (e.g., NVDA, JAWS, VoiceOver) is run. Resourcing for who runs the non-default screen readers in that matrix is to be determined closer to Phase 8.
 * Verification happens on the WordPress.com staging site for the Phase 8 pass, so it reflects the real PMPro-configured environment, not just the local `wp-env` instance.
 
 ### 5. Specific Accessibility Requirements Worth Calling Out
