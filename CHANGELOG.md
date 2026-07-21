@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `GroupsIoApiClient`: wraps the confirmed Groups.io API contract
+  (`directadd`, `removemember`, `getgroup`, `getsubgroups`, `getmembers`)
+  over `wp_remote_request`, with typed exceptions for rate limiting,
+  transport failures, and the confirmed error-type response shape, and
+  `WP_DEBUG` request/response logging with credentials never logged.
+- `SubgroupIdCache`: caches the slug-to-numeric-`group_id` mapping
+  Groups.io requires for member-level operations, with explicit
+  invalidation and a full-refresh path for reconciliation.
+
 ## [0.1.0] - 2026-07-20
 
 ### Added

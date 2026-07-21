@@ -5,7 +5,14 @@
     // guidance — hard-wrapping would not improve non-visual readability
     // and would just add noisy diffs.
     "config": {
-        "MD013": false
+        "MD013": false,
+        // CHANGELOG.md (Keep a Changelog format) repeats headings like
+        // "### Added"/"### Fixed" under every dated version section by
+        // design — only flag duplicates within the same parent section,
+        // not across different ones.
+        "MD024": {
+            "siblings_only": true
+        }
     },
     "globs": [
         "**/*.md"
