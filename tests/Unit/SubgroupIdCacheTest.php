@@ -88,7 +88,7 @@ final class SubgroupIdCacheTest extends WP_UnitTestCase {
 			$this->assertSame( 'group_not_found', $exception->get_error_type() );
 		}
 
-		$this->assertSame( array(), get_option( self::OPTION_NAME ) );
+		$this->assertSame( array(), get_option( self::OPTION_NAME, array() ) );
 	}
 
 	public function test_invalidate_removes_only_the_targeted_slug(): void {

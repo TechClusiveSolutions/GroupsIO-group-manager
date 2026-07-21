@@ -22,11 +22,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 final class GroupsIoRateLimitException extends GroupsIoApiException {
 
 	/**
+	 * Parsed Retry-After header value, in seconds.
+	 *
 	 * @var int
 	 */
 	private int $retry_after_seconds;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param int $retry_after_seconds Parsed Retry-After header value, in seconds.
 	 */
 	public function __construct( int $retry_after_seconds ) {
@@ -36,6 +40,8 @@ final class GroupsIoRateLimitException extends GroupsIoApiException {
 	}
 
 	/**
+	 * Returns the parsed Retry-After value.
+	 *
 	 * @return int
 	 */
 	public function get_retry_after_seconds(): int {

@@ -109,10 +109,13 @@ final class SubgroupIdCache {
 			}
 		}
 
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- an internal exception message, never rendered as HTML output; escaping functions do not apply here.
 		throw new GroupsIoApiException( 'group_not_found', $slug );
 	}
 
 	/**
+	 * Reads the full cached mapping.
+	 *
 	 * @return array<string, int>
 	 */
 	private static function read_cache(): array {
@@ -122,6 +125,8 @@ final class SubgroupIdCache {
 	}
 
 	/**
+	 * Persists the full cached mapping.
+	 *
 	 * @param array<string, int> $cache Full slug => group_id mapping to persist.
 	 * @return void
 	 */

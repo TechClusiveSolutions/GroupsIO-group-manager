@@ -39,6 +39,8 @@ class GroupsIoApiException extends \RuntimeException {
 	private string $extra;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param string $error_type Raw Groups.io error type, or an internal marker.
 	 * @param string $extra      Raw Groups.io "extra" detail, or diagnostic detail.
 	 */
@@ -50,6 +52,8 @@ class GroupsIoApiException extends \RuntimeException {
 	}
 
 	/**
+	 * Returns the raw Groups.io error type, or an internal marker.
+	 *
 	 * @return string
 	 */
 	public function get_error_type(): string {
@@ -57,6 +61,8 @@ class GroupsIoApiException extends \RuntimeException {
 	}
 
 	/**
+	 * Returns the raw Groups.io "extra" detail, or diagnostic detail.
+	 *
 	 * @return string
 	 */
 	public function get_extra(): string {
