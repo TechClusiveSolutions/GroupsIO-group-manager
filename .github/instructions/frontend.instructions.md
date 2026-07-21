@@ -81,6 +81,7 @@ project's accessible-admin-form pattern:
   verification step for any change touching a listed UI surface — flag in
   the PR description whether this has happened, per `CONTRIBUTING.md`, and
   don't assume it's implied by CI being green.
-* A fuller screen reader matrix (NVDA, JAWS, VoiceOver) is required before
-  merging any such change to `dev` and is mandatory for Phase 8's exit
-  criterion — this is separate from, and in addition to, the local pass.
+* A fuller screen reader matrix (NVDA, JAWS, VoiceOver) is reserved for
+  Phase 8's exit criterion — not required before every individual `dev`
+  merge, per `docs/definition-of-done.md` section 3 and
+  `docs/ux-accessibility.md` section 4.
