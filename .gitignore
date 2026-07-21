@@ -4,6 +4,12 @@
 # wp-env
 /.wp-env.override.json
 
+# Env files are not this project's credential mechanism (see
+# wp-config.php constants / .wp-env.override.json above) but are
+# excluded defensively in case one is ever created locally.
+.env
+.env.*
+
 # PHPUnit / coverage
 /coverage/
 .phpunit.result.cache
