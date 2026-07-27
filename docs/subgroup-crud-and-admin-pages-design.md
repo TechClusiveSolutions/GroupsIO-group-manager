@@ -6,7 +6,7 @@
 
 This document specifies the design of the 2026-07-22 scope expansion: adding
 subgroup create/remove to `GroupsIoApiClient` (amending Phase 2), a
-permanent manual integration test for that client, and the new "GroupsIO
+permanent CI-automated integration test for that client, and the new "GroupsIO
 Management" admin area (Phase 3) — three distinct admin pages (User
 Assignment, Feature Controls, Subgroup Management). It is the
 design-confirmation step required before tracking issues are opened and
@@ -26,7 +26,7 @@ In scope for this pass:
   moderation/suspend state on a subgroup, distinct from full removal —
   **not yet done**; this document specifies how the User Assignment page
   behaves in either outcome (section 6).
-* A permanent manual integration test exercising create → add → remove →
+* A permanent CI-automated integration test exercising create → add → remove →
   delete against the test group.
 * The "GroupsIO Management" admin menu category and its three pages: User
   Assignment, Feature Controls, Subgroup Management.
@@ -132,13 +132,22 @@ The original two-outcome plan, preserved for when Phase 6 implements this:
   without a full remove/re-add round trip.
 * **If it's still broken**: use the decided fallback above.
 
-### 5. Permanent Manual Integration Test
+### 5. Automatic CI Integration Test
 
-Per `testing-standard.md` section 4 (integration tests run manually
-against the test group, not part of the CI-gated PHPUnit suite, since CI
-has no Groups.io credentials): a script/test living alongside the existing
-unit tests (e.g. `tests/integration/SubgroupLifecycleIntegrationTest.php`,
-run manually rather than via the standard `phpunit` CI invocation) that:
+**Corrected 2026-07-27**: this section previously said the integration
+test would run manually, citing `testing-standard.md` section 4 as
+support for that — that was a misreading. Section 4 (and `ci.md` section
+3.2) actually specify the opposite: integration tests run automatically
+on every pull request, using a test-group Groups.io API key stored as a
+GitHub Actions environment secret, restricted to PRs originating from
+within the `TechClusiveSolutions` org (not fork PRs), and a failure
+blocks merge. This section now matches that.
+
+A test living alongside the existing unit tests
+(`tests/integration/SubgroupLifecycleIntegrationTest.php`), run via a
+dedicated `integration-tests` job in `ci.yml` (separate from the
+unit-tests job, since it needs the real credential and hits real network)
+gated on the `groupsio-test-group` GitHub Environment, that:
 
 1. Creates two test subgroups under the configured parent test group.
 2. Adds three test email addresses to both subgroups (`direct_add()`,
@@ -249,8 +258,9 @@ collisions with any leftover state from a prior partial run.
   is required before any of the three pages is considered done, per
   `CLAUDE.md`'s Accessibility by Design section — this is not satisfied by
   automated tests alone.
-* The permanent integration test (section 5) is run manually, not part of
-  the CI-gated suite, per `testing-standard.md` section 4.
+* The permanent integration test (section 5) runs automatically in CI on
+  every pull request, gated on the `groupsio-test-group` environment, per
+  `testing-standard.md` section 4 and `ci.md` section 3.2.
 
 ### 12. Exit Criteria (per `phase-plan.md`)
 
@@ -260,7 +270,7 @@ the authoritative source if the two ever diverge:
 * **Phase 2 (amended)**: `create_subgroup()`/`remove_subgroup()` are
   unit-tested and live-verified; the suspend-state investigation is
   resolved one way or the other; the permanent integration test passes
-  when run manually against the test group.
+  automatically in CI against the test group.
 * **Phase 3**: an admin can reach all three GroupsIO Management pages; can
   add/remove a test member's subgroup assignment from User Assignment with
   the sticky-override flag verifiably respected by a subsequent

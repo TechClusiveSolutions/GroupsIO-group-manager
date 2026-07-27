@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the live-verified `createsubgroup`/`deletegroup` contract (`deletegroup`
   is the only deletion endpoint for subgroups), following the client's
   existing conventions and exception dispatch.
+- Permanent subgroup-lifecycle integration test
+  (`tests/integration/SubgroupLifecycleIntegrationTest.php`), run
+  automatically on every pull request against the real test Groups.io
+  group via a new `integration-tests` CI job, gated on the
+  `groupsio-test-group` GitHub Environment and restricted to PRs
+  originating from within the org.
 
 ## [0.1.0] - 2026-07-20
 
