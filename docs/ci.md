@@ -9,7 +9,7 @@ This document specifies what CI runs, on what triggers, and what gates what, per
 ### 2. Trigger
 
 * Both `dev` and `main` have branch protection enabled, with "include administrators" (admin-enforced) set to true, and no direct pushes permitted to either branch under any circumstance — all changes flow through a pull request.
-* Branch protection on both branches does not require a formal GitHub approving review to merge a PR; merge authorization instead comes from the primary contributor's explicit go-ahead in conversation with the working AI assistant, per the project's working agreement.
+* Branch protection on both branches does not require a formal GitHub approving review to merge a PR; merge authorization instead comes from the primary contributor's explicit go-ahead in conversation with the working AI assistant, per the project's working agreement. Separately from that authorization step, every PR must also have GitHub Copilot requested as a reviewer at open time, and is not merge-eligible until Copilot's review has completed and every comment it raised has been addressed — this is a distinct gate from, and in addition to, the primary contributor's go-ahead.
 * CI runs on every pull request opened or updated against `dev`, and on every pull request from `dev` to `main`.
 
 ### 3. Workflow Files
