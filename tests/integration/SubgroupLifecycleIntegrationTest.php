@@ -66,7 +66,7 @@ final class SubgroupLifecycleIntegrationTest extends WP_UnitTestCase {
 
 		foreach ( $subgroup_names as $name ) {
 			try {
-				$created = GroupsIoApiClient::create_subgroup( GROUPS_IO_PARENT_GROUP, $name );
+				$created = GroupsIoApiClient::create_subgroup( GROUPS_IO_PARENT_GROUP, $name, 'Created by the permanent subgroup lifecycle integration test.' );
 			} catch ( GroupsIoApiException $exception ) {
 				$this->fail( sprintf( 'create_subgroup(%s) failed: %s (extra: %s)', $name, $exception->get_error_type(), $exception->get_extra() ) );
 			}

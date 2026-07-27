@@ -83,17 +83,23 @@ final class GroupsIoApiClient {
 	 * Groups.io-API-Reference.md). Sends accept_policies=true even though
 	 * live calls succeeded without it — the docs say it's required, and
 	 * production code follows the documented contract rather than the
-	 * looser observed behavior.
+	 * looser observed behavior. desc must always be sent, even empty —
+	 * live trial (2026-07-27, via the #32 integration test) found Groups.io
+	 * rejecting createsubgroup with 400 bad_request (extra: desc) when the
+	 * field was omitted entirely, contradicting the 2026-07-25 finding that
+	 * it was optional; sending it (defaulting to empty string) satisfies
+	 * both the current and previously-observed behavior.
 	 *
 	 * @param string $parent_group_name Parent group name.
 	 * @param string $subgroup_name     New subgroup name.
+	 * @param string $description       Optional subgroup description; always sent (Groups.io requires the field present).
 	 * @return array<string, mixed> Decoded response, including the new subgroup's numeric id.
 	 *
 	 * @throws GroupsIoTransportException On a network-level failure or 5xx.
 	 * @throws GroupsIoRateLimitException On HTTP 429.
 	 * @throws GroupsIoApiException On any other non-2xx response.
 	 */
-	public static function create_subgroup( string $parent_group_name, string $subgroup_name ): array {
+	public static function create_subgroup( string $parent_group_name, string $subgroup_name, string $description = '' ): array {
 		return self::request(
 			'POST',
 			'createsubgroup',
@@ -101,6 +107,7 @@ final class GroupsIoApiClient {
 			array(
 				'group_name'      => $parent_group_name,
 				'sub_group_name'  => $subgroup_name,
+				'desc'            => $description,
 				'accept_policies' => 'true',
 			)
 		);

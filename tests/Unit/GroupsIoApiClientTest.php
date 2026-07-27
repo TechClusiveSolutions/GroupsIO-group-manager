@@ -83,10 +83,19 @@ final class GroupsIoApiClientTest extends WP_UnitTestCase {
 			array(
 				'group_name'      => 'perception-is-all',
 				'sub_group_name'  => 'new-subgroup',
+				'desc'            => '',
 				'accept_policies' => 'true',
 			),
 			self::$last_request['args']['body']
 		);
+	}
+
+	public function test_create_subgroup_sends_provided_description(): void {
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 152999 ) ) );
+
+		GroupsIoApiClient::create_subgroup( 'perception-is-all', 'new-subgroup', 'A test subgroup.' );
+
+		$this->assertSame( 'A test subgroup.', self::$last_request['args']['body']['desc'] );
 	}
 
 	public function test_create_subgroup_duplicate_name_throws_api_exception(): void {
