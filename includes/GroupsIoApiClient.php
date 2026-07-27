@@ -24,9 +24,17 @@ final class GroupsIoApiClient {
 
 	/**
 	 * Adds one or more emails to the parent group and one or more
-	 * subgroups in a single call. Batches across subgroups via repeated
-	 * subgroupid fields (PRD section 4.2); does not batch across
-	 * multiple direct_add() calls.
+	 * subgroups in a single call.
+	 *
+	 * Corrected 2026-07-27 by live trial (via the #32 integration test):
+	 * emails must be newline-separated, not comma-separated (comma-joined
+	 * input is parsed as a single invalid address); subgroup ids go in the
+	 * plural, comma-separated `subgroupids` field, not a repeated
+	 * `subgroupid` field — the earlier implementation's `subgroupid`
+	 * field was silently ignored by Groups.io, so the add only ever
+	 * reached the parent group, never the subgroup. See
+	 * Groups.io-API-Reference.md sections 1 and 3.1 for the confirmed
+	 * contract this now matches.
 	 *
 	 * @param string             $group_name   Parent group name.
 	 * @param array<int, string> $emails       Email addresses to add.
@@ -38,19 +46,20 @@ final class GroupsIoApiClient {
 	 * @throws GroupsIoApiException On any other non-2xx response.
 	 */
 	public static function direct_add( string $group_name, array $emails, array $subgroup_ids ): array {
-		$body_string = self::encode_body_with_repeated_field(
+		return self::request(
+			'POST',
+			'directadd',
+			array(),
 			array(
-				'group_name' => $group_name,
-				// Comma-separated per Groups.io's documented convention for
-				// a multi-email single field; unlike subgroupid, PRD section
-				// 4.2 does not describe emails as a repeated field.
-				'emails'     => implode( ',', $emails ),
-			),
-			'subgroupid',
-			$subgroup_ids
+				'group_name'  => $group_name,
+				'emails'      => implode(
+					'
+',
+					$emails
+				),
+				'subgroupids' => implode( ',', $subgroup_ids ),
+			)
 		);
-
-		return self::request( 'POST', 'directadd', array(), $body_string );
 	}
 
 	/**
@@ -189,31 +198,6 @@ final class GroupsIoApiClient {
 		return self::request( 'GET', 'getmembers', array( 'group_id' => $group_id ) );
 	}
 
-	/**
-	 * Builds a raw urlencoded body string with one field repeated
-	 * multiple times, which PHP associative arrays cannot represent
-	 * (duplicate keys collapse to the last one) — so wp_remote_request's
-	 * array-body form can't be used for directadd's repeated subgroupid
-	 * field.
-	 *
-	 * @param array<string, mixed> $scalar_fields   Ordinary single-value fields.
-	 * @param string               $repeated_key    Field name to repeat.
-	 * @param array<int, mixed>    $repeated_values Values for the repeated field.
-	 * @return string
-	 */
-	private static function encode_body_with_repeated_field( array $scalar_fields, string $repeated_key, array $repeated_values ): string {
-		$parts = array();
-
-		foreach ( $scalar_fields as $key => $value ) {
-			$parts[] = rawurlencode( (string) $key ) . '=' . rawurlencode( (string) $value );
-		}
-
-		foreach ( $repeated_values as $value ) {
-			$parts[] = rawurlencode( $repeated_key ) . '=' . rawurlencode( (string) $value );
-		}
-
-		return implode( '&', $parts );
-	}
 
 	/**
 	 * Issues the HTTP request and dispatches the response, per the

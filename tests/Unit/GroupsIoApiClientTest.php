@@ -46,20 +46,22 @@ final class GroupsIoApiClientTest extends WP_UnitTestCase {
 		);
 	}
 
-	public function test_direct_add_sends_post_with_repeated_subgroupid_fields(): void {
+	public function test_direct_add_sends_post_with_newline_emails_and_comma_subgroupids(): void {
 		$this->mock_response( $this->json_response( 200, array( 'object' => 'ok' ) ) );
 
 		$result = GroupsIoApiClient::direct_add( 'bits', array( 'a@example.test', 'b@example.test' ), array( 111, 222 ) );
 
 		$this->assertSame( array( 'object' => 'ok' ), $result );
 		$this->assertSame( 'POST', self::$last_request['args']['method'] );
-
-		$body = self::$last_request['args']['body'];
-		$this->assertStringContainsString( 'group_name=bits', $body );
-		$this->assertStringContainsString( 'emails=a%40example.test%2Cb%40example.test', $body );
-		$this->assertSame( 2, substr_count( $body, 'subgroupid=' ) );
-		$this->assertStringContainsString( 'subgroupid=111', $body );
-		$this->assertStringContainsString( 'subgroupid=222', $body );
+		$this->assertSame(
+			array(
+				'group_name'  => 'bits',
+				'emails'      => "a@example.test
+b@example.test",
+				'subgroupids' => '111,222',
+			),
+			self::$last_request['args']['body']
+		);
 	}
 
 	public function test_remove_member_sends_post_with_single_member_info_id(): void {
