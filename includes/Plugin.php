@@ -7,6 +7,8 @@
 
 namespace BITS\GroupsIOSync;
 
+use BITS\GroupsIOSync\Admin\GroupsIoManagementMenu;
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
@@ -44,6 +46,7 @@ final class Plugin {
 	private function __construct() {
 		Settings::register();
 		LevelMandatoryGroups::register();
+		GroupsIoManagementMenu::register();
 
 		// Remaining subsystems (Groups.io client, sync engine, magic link,
 		// audit log reader) are registered here as later phases add them.
