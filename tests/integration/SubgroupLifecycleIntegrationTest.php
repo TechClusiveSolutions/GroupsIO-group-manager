@@ -3,6 +3,7 @@
 namespace BITS\GroupsIOSync\Tests\Integration;
 
 use BITS\GroupsIOSync\GroupsIoApiClient;
+use BITS\GroupsIOSync\GroupsIoApiException;
 use WP_UnitTestCase;
 
 /**
@@ -64,7 +65,11 @@ final class SubgroupLifecycleIntegrationTest extends WP_UnitTestCase {
 		$subgroup_ids = array();
 
 		foreach ( $subgroup_names as $name ) {
-			$created = GroupsIoApiClient::create_subgroup( GROUPS_IO_PARENT_GROUP, $name );
+			try {
+				$created = GroupsIoApiClient::create_subgroup( GROUPS_IO_PARENT_GROUP, $name );
+			} catch ( GroupsIoApiException $exception ) {
+				$this->fail( sprintf( 'create_subgroup(%s) failed: %s (extra: %s)', $name, $exception->get_error_type(), $exception->get_extra() ) );
+			}
 
 			$this->assertArrayHasKey( 'id', $created, "create_subgroup() response missing 'id' for {$name}." );
 
