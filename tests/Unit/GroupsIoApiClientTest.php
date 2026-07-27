@@ -71,6 +71,70 @@ final class GroupsIoApiClientTest extends WP_UnitTestCase {
 		$this->assertSame( array( 'member_info_id' => 999 ), self::$last_request['args']['body'] );
 	}
 
+	public function test_create_subgroup_sends_post_with_expected_fields(): void {
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 152999 ) ) );
+
+		$result = GroupsIoApiClient::create_subgroup( 'perception-is-all', 'new-subgroup' );
+
+		$this->assertSame( array( 'object' => 'group', 'id' => 152999 ), $result );
+		$this->assertSame( 'POST', self::$last_request['args']['method'] );
+		$this->assertStringContainsString( 'createsubgroup', self::$last_request['url'] );
+		$this->assertSame(
+			array(
+				'group_name'      => 'perception-is-all',
+				'sub_group_name'  => 'new-subgroup',
+				'accept_policies' => 'true',
+			),
+			self::$last_request['args']['body']
+		);
+	}
+
+	public function test_create_subgroup_duplicate_name_throws_api_exception(): void {
+		$this->mock_response( $this->json_response( 400, array(
+			'object' => 'error',
+			'type'   => 'subgroup_exists',
+			'extra'  => 'sub_group_name',
+		) ) );
+
+		try {
+			GroupsIoApiClient::create_subgroup( 'perception-is-all', 'sociology' );
+			$this->fail( 'Expected GroupsIoApiException.' );
+		} catch ( GroupsIoApiException $exception ) {
+			$this->assertSame( 'subgroup_exists', $exception->get_error_type() );
+		}
+	}
+
+	public function test_remove_subgroup_sends_post_with_group_id_and_understand(): void {
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'ok' ) ) );
+
+		GroupsIoApiClient::remove_subgroup( 152999 );
+
+		$this->assertSame( 'POST', self::$last_request['args']['method'] );
+		$this->assertStringContainsString( 'deletegroup', self::$last_request['url'] );
+		$this->assertSame(
+			array(
+				'group_id'   => 152999,
+				'understand' => 'I understand',
+			),
+			self::$last_request['args']['body']
+		);
+	}
+
+	public function test_remove_subgroup_not_found_throws_api_exception(): void {
+		$this->mock_response( $this->json_response( 400, array(
+			'object' => 'error',
+			'type'   => 'group_not_found',
+			'extra'  => '',
+		) ) );
+
+		try {
+			GroupsIoApiClient::remove_subgroup( 999999 );
+			$this->fail( 'Expected GroupsIoApiException.' );
+		} catch ( GroupsIoApiException $exception ) {
+			$this->assertSame( 'group_not_found', $exception->get_error_type() );
+		}
+	}
+
 	public function test_get_group_sends_get_with_group_name_query_arg(): void {
 		$this->mock_response( $this->json_response( 200, array( 'object' => 'group' ) ) );
 

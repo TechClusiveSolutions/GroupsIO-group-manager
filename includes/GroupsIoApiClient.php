@@ -77,6 +77,62 @@ final class GroupsIoApiClient {
 	}
 
 	/**
+	 * Creates a subgroup under the given parent group. The creating
+	 * account is auto-added as the subgroup's sole owner-member
+	 * (confirmed by live trial, 2026-07-25 — see
+	 * Groups.io-API-Reference.md). Sends accept_policies=true even though
+	 * live calls succeeded without it — the docs say it's required, and
+	 * production code follows the documented contract rather than the
+	 * looser observed behavior.
+	 *
+	 * @param string $parent_group_name Parent group name.
+	 * @param string $subgroup_name     New subgroup name.
+	 * @return array<string, mixed> Decoded response, including the new subgroup's numeric id.
+	 *
+	 * @throws GroupsIoTransportException On a network-level failure or 5xx.
+	 * @throws GroupsIoRateLimitException On HTTP 429.
+	 * @throws GroupsIoApiException On any other non-2xx response.
+	 */
+	public static function create_subgroup( string $parent_group_name, string $subgroup_name ): array {
+		return self::request(
+			'POST',
+			'createsubgroup',
+			array(),
+			array(
+				'group_name'      => $parent_group_name,
+				'sub_group_name'  => $subgroup_name,
+				'accept_policies' => 'true',
+			)
+		);
+	}
+
+	/**
+	 * Deletes a subgroup by its numeric ID. deletegroup is the only
+	 * deletion endpoint — removesubgroup/deletesubgroup do not exist
+	 * (confirmed by live trial, 2026-07-25 — see
+	 * Groups.io-API-Reference.md). Works while members are still present;
+	 * no separate member-removal step is required first.
+	 *
+	 * @param int $subgroup_id Numeric subgroup ID.
+	 * @return array<string, mixed>
+	 *
+	 * @throws GroupsIoTransportException On a network-level failure or 5xx.
+	 * @throws GroupsIoRateLimitException On HTTP 429.
+	 * @throws GroupsIoApiException On any other non-2xx response.
+	 */
+	public static function remove_subgroup( int $subgroup_id ): array {
+		return self::request(
+			'POST',
+			'deletegroup',
+			array(),
+			array(
+				'group_id'   => $subgroup_id,
+				'understand' => 'I understand',
+			)
+		);
+	}
+
+	/**
 	 * Looks up a group or subgroup by its name string. Valid at the
 	 * parent/listing level (PRD section 4.2). Confirmed GET by live
 	 * trial against the test group (see
