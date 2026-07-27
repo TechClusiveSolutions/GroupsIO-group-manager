@@ -19,6 +19,11 @@ use WP_UnitTestCase;
  * they are not present, so a manual local run without the real
  * credential does not fail — in CI, the groupsio-test-group environment
  * secret guarantees they are always set.
+ *
+ * Read-backs poll briefly rather than asserting immediately: a live run
+ * (2026-07-27) found Groups.io's member list eventually consistent —
+ * get_members() immediately after a successful direct_add() sometimes
+ * did not yet reflect the new member.
  */
 final class SubgroupLifecycleIntegrationTest extends WP_UnitTestCase {
 
@@ -27,6 +32,9 @@ final class SubgroupLifecycleIntegrationTest extends WP_UnitTestCase {
 		'dev+integration-b@techclusivesolutions.com',
 		'dev+integration-c@techclusivesolutions.com',
 	);
+
+	private const POLL_ATTEMPTS = 5;
+	private const POLL_DELAY_SECONDS = 2;
 
 	/** @var array<int, int> Subgroup IDs created during the test, for cleanup. */
 	private array $created_subgroup_ids = array();
@@ -54,6 +62,30 @@ final class SubgroupLifecycleIntegrationTest extends WP_UnitTestCase {
 		parent::tear_down();
 	}
 
+	/**
+	 * Polls a condition against eventually-consistent Groups.io state,
+	 * re-fetching via $poll on every attempt, until $check accepts the
+	 * latest fetched value or attempts are exhausted — then runs $check
+	 * one final time so PHPUnit reports a normal, specific assertion
+	 * failure rather than a generic timeout.
+	 *
+	 * @param callable $poll  Fetches the current state (e.g. a get_members() call).
+	 * @param callable $check Runs the real PHPUnit assertion(s) against that state.
+	 * @return void
+	 */
+	private function assert_eventually( callable $poll, callable $check ): void {
+		for ( $attempt = 1; $attempt < self::POLL_ATTEMPTS; $attempt++ ) {
+			try {
+				$check( $poll() );
+				return;
+			} catch ( \PHPUnit\Framework\AssertionFailedError $exception ) {
+				sleep( self::POLL_DELAY_SECONDS );
+			}
+		}
+
+		$check( $poll() );
+	}
+
 	public function test_full_subgroup_lifecycle_against_real_test_group(): void {
 		$run_id = (string) time();
 		$subgroup_names = array(
@@ -74,34 +106,47 @@ final class SubgroupLifecycleIntegrationTest extends WP_UnitTestCase {
 			$this->assertArrayHasKey( 'id', $created, "create_subgroup() response missing 'id' for {$name}." );
 
 			$subgroup_id = (int) $created['id'];
-			$subgroup_ids[]                = $subgroup_id;
-			$this->created_subgroup_ids[]   = $subgroup_id;
+			$subgroup_ids[]               = $subgroup_id;
+			$this->created_subgroup_ids[] = $subgroup_id;
 		}
 
 		// Read-back: both subgroups actually exist on Groups.io.
-		$listed = GroupsIoApiClient::get_subgroups( GROUPS_IO_PARENT_GROUP );
-		$listed_ids = array_column( $listed['data'] ?? array(), 'id' );
+		$this->assert_eventually(
+			static fn () => GroupsIoApiClient::get_subgroups( GROUPS_IO_PARENT_GROUP ),
+			function ( array $listed ) use ( $subgroup_ids ) {
+				$listed_ids = array_column( $listed['data'] ?? array(), 'id' );
 
-		foreach ( $subgroup_ids as $subgroup_id ) {
-			$this->assertContains( $subgroup_id, $listed_ids, "Created subgroup {$subgroup_id} not found in get_subgroups() read-back." );
-		}
+				foreach ( $subgroup_ids as $subgroup_id ) {
+					$this->assertContains( $subgroup_id, $listed_ids, "Created subgroup {$subgroup_id} not found in get_subgroups() read-back." );
+				}
+			}
+		);
 
 		// 2. Add three test emails to both subgroups.
 		GroupsIoApiClient::direct_add( GROUPS_IO_PARENT_GROUP, self::TEST_EMAILS, $subgroup_ids );
 
 		// Read-back: every email is now a member of every subgroup.
+		foreach ( $subgroup_ids as $subgroup_id ) {
+			$this->assert_eventually(
+				static fn () => GroupsIoApiClient::get_members( $subgroup_id ),
+				function ( array $members ) use ( $subgroup_id ) {
+					$emails_present = array_column( $members['data'] ?? array(), 'email' );
+
+					foreach ( self::TEST_EMAILS as $email ) {
+						$this->assertContains( $email, $emails_present, "{$email} not found in subgroup {$subgroup_id} after direct_add()." );
+					}
+				}
+			);
+		}
+
+		// Collect the member_info_ids to remove — a fresh, settled read
+		// after the polling above, not the (possibly stale) first response.
 		$member_info_ids = array();
 
 		foreach ( $subgroup_ids as $subgroup_id ) {
 			$members = GroupsIoApiClient::get_members( $subgroup_id );
-			$member_records = $members['data'] ?? array();
-			$emails_present = array_column( $member_records, 'email' );
 
-			foreach ( self::TEST_EMAILS as $email ) {
-				$this->assertContains( $email, $emails_present, "{$email} not found in subgroup {$subgroup_id} after direct_add()." );
-			}
-
-			foreach ( $member_records as $record ) {
+			foreach ( $members['data'] ?? array() as $record ) {
 				if ( in_array( $record['email'] ?? '', self::TEST_EMAILS, true ) ) {
 					$member_info_ids[] = (int) $record['id'];
 				}
@@ -116,12 +161,16 @@ final class SubgroupLifecycleIntegrationTest extends WP_UnitTestCase {
 
 		// Read-back: no test emails remain in either subgroup.
 		foreach ( $subgroup_ids as $subgroup_id ) {
-			$members = GroupsIoApiClient::get_members( $subgroup_id );
-			$emails_present = array_column( $members['data'] ?? array(), 'email' );
+			$this->assert_eventually(
+				static fn () => GroupsIoApiClient::get_members( $subgroup_id ),
+				function ( array $members ) use ( $subgroup_id ) {
+					$emails_present = array_column( $members['data'] ?? array(), 'email' );
 
-			foreach ( self::TEST_EMAILS as $email ) {
-				$this->assertNotContains( $email, $emails_present, "{$email} still present in subgroup {$subgroup_id} after remove_member()." );
-			}
+					foreach ( self::TEST_EMAILS as $email ) {
+						$this->assertNotContains( $email, $emails_present, "{$email} still present in subgroup {$subgroup_id} after remove_member()." );
+					}
+				}
+			);
 		}
 
 		// 4. Delete both subgroups.
@@ -130,12 +179,16 @@ final class SubgroupLifecycleIntegrationTest extends WP_UnitTestCase {
 		}
 
 		// Read-back: neither subgroup exists anymore.
-		$listed_after_delete = GroupsIoApiClient::get_subgroups( GROUPS_IO_PARENT_GROUP );
-		$listed_ids_after_delete = array_column( $listed_after_delete['data'] ?? array(), 'id' );
+		$this->assert_eventually(
+			static fn () => GroupsIoApiClient::get_subgroups( GROUPS_IO_PARENT_GROUP ),
+			function ( array $listed ) use ( $subgroup_ids ) {
+				$listed_ids = array_column( $listed['data'] ?? array(), 'id' );
 
-		foreach ( $subgroup_ids as $subgroup_id ) {
-			$this->assertNotContains( $subgroup_id, $listed_ids_after_delete, "Subgroup {$subgroup_id} still listed after remove_subgroup()." );
-		}
+				foreach ( $subgroup_ids as $subgroup_id ) {
+					$this->assertNotContains( $subgroup_id, $listed_ids, "Subgroup {$subgroup_id} still listed after remove_subgroup()." );
+				}
+			}
+		);
 
 		// Successfully deleted — nothing left for tear_down() to clean up.
 		$this->created_subgroup_ids = array();
