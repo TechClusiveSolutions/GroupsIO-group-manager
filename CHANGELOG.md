@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SubgroupIdCache`: caches the slug-to-numeric-`group_id` mapping
   Groups.io requires for member-level operations, with explicit
   invalidation and a full-refresh path for reconciliation.
+- `GroupsIoApiClient::create_subgroup()` / `::remove_subgroup()`: wrap
+  the live-verified `createsubgroup`/`deletegroup` contract (`deletegroup`
+  is the only deletion endpoint for subgroups), following the client's
+  existing conventions and exception dispatch.
 
 ## [0.1.0] - 2026-07-20
 
