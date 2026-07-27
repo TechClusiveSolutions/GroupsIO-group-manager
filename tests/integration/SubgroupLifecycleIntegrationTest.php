@@ -33,8 +33,8 @@ final class SubgroupLifecycleIntegrationTest extends WP_UnitTestCase {
 		'dev+integration-c@techclusivesolutions.com',
 	);
 
-	private const POLL_ATTEMPTS = 5;
-	private const POLL_DELAY_SECONDS = 2;
+	private const POLL_ATTEMPTS = 8;
+	private const POLL_DELAY_SECONDS = 3;
 
 	/** @var array<int, int> Subgroup IDs created during the test, for cleanup. */
 	private array $created_subgroup_ids = array();
@@ -123,7 +123,14 @@ final class SubgroupLifecycleIntegrationTest extends WP_UnitTestCase {
 		);
 
 		// 2. Add three test emails to both subgroups.
-		GroupsIoApiClient::direct_add( GROUPS_IO_PARENT_GROUP, self::TEST_EMAILS, $subgroup_ids );
+		$direct_add_result = GroupsIoApiClient::direct_add( GROUPS_IO_PARENT_GROUP, self::TEST_EMAILS, $subgroup_ids );
+
+		$direct_add_errors = $direct_add_result['direct_add_results']['errors'] ?? array();
+		$this->assertSame(
+			array(),
+			$direct_add_errors,
+			'direct_add() reported per-email/per-group errors: ' . wp_json_encode( $direct_add_errors )
+		);
 
 		// Read-back: every email is now a member of every subgroup.
 		foreach ( $subgroup_ids as $subgroup_id ) {
