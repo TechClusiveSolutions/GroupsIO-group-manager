@@ -125,7 +125,7 @@ final class SettingsTest extends WP_UnitTestCase {
 		$output = ob_get_clean();
 
 		$this->assertStringContainsString( '<form', $output );
-		$this->assertStringContainsString( 'BITS Groups.io Sync', $output );
+		$this->assertStringContainsString( 'Feature Controls', $output );
 	}
 
 	public function test_render_page_outputs_a_reset_button(): void {
@@ -201,11 +201,10 @@ final class SettingsTest extends WP_UnitTestCase {
 		$this->assertStringContainsString( '<label for="bits_groupsio_sync_settings_grace_period_days">', $field['title'] );
 	}
 
-	public function test_add_menu_page_and_register_setting_run_without_error(): void {
+	public function test_register_setting_runs_without_error(): void {
 		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
 		wp_set_current_user( $admin_id );
 
-		Settings::add_menu_page();
 		Settings::register_setting();
 
 		$this->assertTrue( true );

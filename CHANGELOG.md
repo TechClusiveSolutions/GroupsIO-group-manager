@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New "GroupsIO Management" top-level admin menu (`includes/Admin/`), with three submenu pages: User Assignment (default landing page, placeholder pending #35), Feature Controls (the relocated Phase 1 Settings page - same underlying storage and rendering, only its menu location and title changed), and Subgroup Management (placeholder pending #34).
+
 - `GroupsIoApiClient`: wraps the confirmed Groups.io API contract
   (`directadd`, `removemember`, `getgroup`, `getsubgroups`, `getmembers`)
   over `wp_remote_request`, with typed exceptions for rate limiting,

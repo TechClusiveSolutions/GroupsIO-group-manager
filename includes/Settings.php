@@ -1,6 +1,10 @@
 <?php
 /**
- * Operational settings screen (Settings -> BITS Groups.io Sync).
+ * Operational settings storage and rendering, shown on the GroupsIO
+ * Management -> Feature Controls admin page (relocated from its
+ * original standalone Settings -> BITS Groups.io Sync placement by
+ * Admin\FeatureControlsPage; this class no longer registers its own
+ * menu entry).
  *
  * @package BITS\GroupsIOSync
  */
@@ -80,23 +84,7 @@ final class Settings {
 	 * @return void
 	 */
 	public static function register(): void {
-		add_action( 'admin_menu', array( self::class, 'add_menu_page' ) );
 		add_action( 'admin_init', array( self::class, 'register_setting' ) );
-	}
-
-	/**
-	 * Adds the Settings -> BITS Groups.io Sync submenu page.
-	 *
-	 * @return void
-	 */
-	public static function add_menu_page(): void {
-		add_options_page(
-			__( 'BITS Groups.io Sync', 'bits-groupsio-sync' ),
-			__( 'BITS Groups.io Sync', 'bits-groupsio-sync' ),
-			'manage_options',
-			'bits-groupsio-sync',
-			array( self::class, 'render_page' )
-		);
 	}
 
 	/**
@@ -239,7 +227,7 @@ final class Settings {
 			return;
 		}
 
-		echo '<div class="wrap"><h1>' . esc_html__( 'BITS Groups.io Sync', 'bits-groupsio-sync' ) . '</h1><form action="options.php" method="post">';
+		echo '<div class="wrap"><h1>' . esc_html__( 'Feature Controls', 'bits-groupsio-sync' ) . '</h1><form action="options.php" method="post">';
 		settings_fields( 'bits_groupsio_sync' );
 		do_settings_sections( 'bits-groupsio-sync' );
 		submit_button( __( 'Save Changes', 'bits-groupsio-sync' ), 'primary', 'submit', false );
