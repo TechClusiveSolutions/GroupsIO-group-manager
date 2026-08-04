@@ -149,6 +149,39 @@ final class GroupsIoApiClient {
 	}
 
 	/**
+	 * Renames a subgroup. Confirmed by live trial (2026-08-04) that
+	 * updategroup's `name` parameter (form `ParentGroupName+SubGroupName`)
+	 * performs a true rename â updates `name`, `group_url`,
+	 * `email_address`, and `subject_tag` consistently. This is distinct
+	 * from `title`, a separate cosmetic display-only field that does
+	 * *not* change the slug/URL/email/subject-tag (also confirmed by live
+	 * trial) â `title` is intentionally not exposed here since it
+	 * would silently fail to do what an admin calling this "rename"
+	 * expects. See Groups.io-API-Reference.md section 4.4 and
+	 * docs/subgroup-crud-and-admin-pages-design.md section 9.
+	 *
+	 * @param int    $subgroup_id       Numeric subgroup ID.
+	 * @param string $parent_group_name Parent group name (bare slug).
+	 * @param string $new_subgroup_name New subgroup name segment (without the parent prefix).
+	 * @return array<string, mixed> Decoded response (the updated group object).
+	 *
+	 * @throws GroupsIoTransportException On a network-level failure or 5xx.
+	 * @throws GroupsIoRateLimitException On HTTP 429.
+	 * @throws GroupsIoApiException On any other non-2xx response.
+	 */
+	public static function update_subgroup( int $subgroup_id, string $parent_group_name, string $new_subgroup_name ): array {
+		return self::request(
+			'POST',
+			'updategroup',
+			array(),
+			array(
+				'group_id' => $subgroup_id,
+				'name'     => $parent_group_name . '+' . $new_subgroup_name,
+			)
+		);
+	}
+
+	/**
 	 * Looks up a group or subgroup by its name string. Valid at the
 	 * parent/listing level (PRD section 4.2). Confirmed GET by live
 	 * trial against the test group (see

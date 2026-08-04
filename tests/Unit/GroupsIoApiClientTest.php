@@ -146,6 +146,43 @@ b@example.test",
 		}
 	}
 
+	public function test_update_subgroup_sends_post_with_group_id_and_composed_name(): void {
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+renamed' ) ) );
+
+		GroupsIoApiClient::update_subgroup( 152999, 'perception-is-all', 'renamed' );
+
+		$this->assertSame( 'POST', self::$last_request['args']['method'] );
+		$this->assertStringContainsString( 'updategroup', self::$last_request['url'] );
+		$this->assertSame(
+			array(
+				'group_id' => 152999,
+				'name'     => 'perception-is-all+renamed',
+			),
+			self::$last_request['args']['body']
+		);
+	}
+
+	public function test_update_subgroup_duplicate_name_throws_api_exception(): void {
+		// Per the live docs' Additional Errors table for updategroup:
+		// bad_request / "name exists" is returned if the group name is
+		// already taken â matching the documented type/extra convention
+		// (type=bad_request, extra=human-readable detail), not a distinct
+		// "name_exists" type.
+		$this->mock_response( $this->json_response( 400, array(
+			'object' => 'error',
+			'type'   => 'bad_request',
+			'extra'  => 'name exists',
+		) ) );
+
+		try {
+			GroupsIoApiClient::update_subgroup( 152999, 'perception-is-all', 'sociology' );
+			$this->fail( 'Expected GroupsIoApiException.' );
+		} catch ( GroupsIoApiException $exception ) {
+			$this->assertSame( 'bad_request', $exception->get_error_type() );
+			$this->assertSame( 'name exists', $exception->get_extra() );
+		}
+	}
+
 	public function test_get_group_sends_get_with_group_name_query_arg(): void {
 		$this->mock_response( $this->json_response( 200, array( 'object' => 'group' ) ) );
 

@@ -53,7 +53,7 @@ Explicitly not in scope for this pass (later phases):
   jobs, matching how PRD-scoped admin actions work elsewhere in this
   plugin.
 
-### 3. Client Additions: `create_subgroup()` / `remove_subgroup()` — Open Verification Item
+### 3. Client Additions: `create_subgroup()` / `remove_subgroup()` — Resolved (see also section 9 for the later `update_subgroup()` / rename resolution)
 
 Per this project's established practice (`CLAUDE.md`, PRD section 9), the
 HTTP contract for these two operations must be confirmed by live trial
@@ -221,11 +221,14 @@ collisions with any leftover state from a prior partial run.
 * "Delete subgroup" action per row, with a confirmation step (WordPress's
   standard `wp_nonce`-protected confirmation pattern), calling
   `remove_subgroup()` and invalidating the cache entry for that subgroup.
-* "Update" (per the CRUD requirement) covers renaming a subgroup, if
-  Groups.io's API supports a rename/update operation — this is folded into
-  the same section-3 live-verification pass, since it wasn't separately
-  called out in the original scope discussion but is implied by "create,
-  list, update, and delete."
+* "Update" (rename): **resolved 2026-08-04.** `updategroup` supports a
+  `name` parameter (form `ParentGroupName+SubGroupName`) that performs a
+  full rename — confirmed by live trial to update the subgroup's `name`,
+  `group_url`, `email_address`, and `subject_tag` consistently. This is
+  distinct from `title`, a separate cosmetic display-only field that does
+  **not** change the slug/URL/email/subject-tag (also confirmed by live
+  trial). The Subgroup Management page's rename action uses `name`, not
+  `title`.
 
 ### 10. Page: User Assignment
 

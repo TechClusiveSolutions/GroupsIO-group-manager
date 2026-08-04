@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- New "GroupsIO Management" top-level admin menu (`includes/Admin/`), with three submenu pages: User Assignment (default landing page, placeholder pending #35), Feature Controls (the relocated Phase 1 Settings page - same underlying storage and rendering, only its menu location and title changed), and Subgroup Management (placeholder pending #34).
+- New "GroupsIO Management" top-level admin menu (`includes/Admin/`), with three submenu pages: User Assignment (default landing page, placeholder pending #35), Feature Controls (the relocated Phase 1 Settings page - same underlying storage and rendering, only its menu location and title changed), and Subgroup Management (see below).
+- Subgroup Management admin page (`Admin\SubgroupManagementPage`): list all subgroups with live member counts and a per-row "view members" expansion; create, rename, and delete subgroups, each backed by a live-verified Groups.io API call with a follow-up read-back; delete requires a nonce-protected confirmation step; API errors are surfaced in plain language, never a raw error dump; the create form stays usable even if the list itself fails to load. Rename uses `updategroup`'s `name` parameter (confirmed by live trial to update the slug/URL/email/subject-tag consistently, unlike its separate cosmetic-only `title` parameter) - the page also warns that renaming does not update any PMPro level's mandatory-groups list referencing the old slug.
+- `GroupsIoApiClient::update_subgroup()`: renames a subgroup via the live-verified `updategroup` `name` parameter contract.
 
 - `GroupsIoApiClient`: wraps the confirmed Groups.io API contract
   (`directadd`, `removemember`, `getgroup`, `getsubgroups`, `getmembers`)
