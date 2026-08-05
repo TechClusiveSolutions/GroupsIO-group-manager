@@ -379,6 +379,15 @@ final class SubgroupManagementPage {
 		try {
 			GroupsIoApiClient::remove_subgroup( $subgroup_id );
 		} catch ( GroupsIoApiException $exception ) {
+			// The pre-check above can be stale (Groups.io's listing is
+			// eventually consistent, per assert_eventually() in
+			// SubgroupLifecycleIntegrationTest) - if the pre-check still saw
+			// the subgroup but deletegroup itself now reports it's already
+			// gone, that's an already-achieved delete, not a failure.
+			if ( 'group_not_found' === $exception->get_error_type() ) {
+				SubgroupIdCache::invalidate( $slug );
+				return array( 'deleted', '' );
+			}
 			return array( 'delete_failed', self::friendly_error( $exception ) );
 		} catch ( GroupsIoTransportException $exception ) {
 			return array( 'delete_failed', __( 'a connection problem occurred.', 'bits-groupsio-sync' ) );
@@ -911,6 +920,15 @@ final class SubgroupManagementPage {
 	private static function friendly_error( GroupsIoApiException $exception ): string {
 		if ( $exception instanceof GroupsIoRateLimitException ) {
 			return __( 'Groups.io is rate-limiting requests right now. Please try again shortly.', 'bits-groupsio-sync' );
+		}
+
+		// 'unexpected_status' carries a raw HTTP status/body dump in its
+		// extra field (see GroupsIoApiClient::request()), not a
+		// Groups.io-authored human-readable detail like every other error
+		// type - surfacing it verbatim would violate this page's
+		// plain-language error requirement.
+		if ( 'unexpected_status' === $exception->get_error_type() ) {
+			return __( 'an unexpected error occurred.', 'bits-groupsio-sync' );
 		}
 
 		$extra = $exception->get_extra();

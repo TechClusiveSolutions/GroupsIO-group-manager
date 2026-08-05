@@ -38,7 +38,7 @@ this project's documented development setup on phoenix).
 
 Auth happens once, in `global-setup.ts`, and is reused across every
 spec file via Playwright's `storageState` mechanism - don't log in
-inside an ordinary test. The one exception is `tests/end-to-end.spec.ts`,
+inside an ordinary test. The one exception is `tests/e2e/tests/end-to-end.spec.ts`,
 which deliberately starts unauthenticated to cover the full
 login-through-a-Groups.io-update path this project requires at least
 one test to exercise.

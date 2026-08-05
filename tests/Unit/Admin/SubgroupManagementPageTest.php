@@ -462,6 +462,29 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		$this->assertSame( 'name already taken', $detail );
 	}
 
+	public function test_process_create_unexpected_status_error_never_exposes_raw_http_dump(): void {
+		// No 'type' key - this is the shape that makes GroupsIoApiClient
+		// throw with the internal 'unexpected_status' marker and a raw
+		// "HTTP <code>: <body>" string as its extra detail.
+		$this->queue_responses( array(
+			$this->json_response( 400, array( 'object' => 'error' ) ),
+		) );
+
+		$_POST['sub_group_name'] = 'sociology';
+		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
+		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_create();
+
+		unset( $_POST['sub_group_name'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertSame( 'create_failed', $code );
+		// Never the raw "HTTP 400: {...}" dump - that's a machine-oriented
+		// detail, not a plain-language message fit for an admin notice.
+		$this->assertStringNotContainsString( 'HTTP', $detail );
+		$this->assertSame( 'an unexpected error occurred.', $detail );
+	}
+
 	// -------------------- process_update() --------------------
 
 	public function test_process_update_rejects_id_slug_mismatch(): void {
@@ -684,6 +707,36 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 
 		$cache = get_option( 'bits_groupsio_subgroup_cache' );
 		$this->assertArrayNotHasKey( 'perception-is-all+already-gone', $cache );
+	}
+
+	public function test_process_delete_treats_group_not_found_from_delete_call_as_idempotent_success(): void {
+		update_option( 'bits_groupsio_subgroup_cache', array( 'perception-is-all+racing' => 152370 ) );
+
+		// The pre-check listing is stale and still shows the target (Groups.io
+		// listings are eventually consistent), but the deletegroup call itself
+		// reports it's already gone - a concurrent/earlier delete must have
+		// already succeeded, so this should be treated as success, not failure.
+		$this->queue_responses( array(
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 152370, 'perception-is-all+racing' ),
+			) ),
+			$this->json_response( 400, array( 'object' => 'error', 'type' => 'group_not_found', 'extra' => '' ) ),
+		) );
+
+		$_POST['subgroup_id']  = '152370';
+		$_POST['current_slug'] = 'perception-is-all+racing';
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_delete_subgroup' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_delete();
+
+		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertSame( 'deleted', $code );
+		$this->assert_queue_exhausted();
+
+		$cache = get_option( 'bits_groupsio_subgroup_cache' );
+		$this->assertArrayNotHasKey( 'perception-is-all+racing', $cache );
 	}
 
 	public function test_process_delete_pre_check_lookup_failure_returns_delete_failed_not_deleted(): void {
