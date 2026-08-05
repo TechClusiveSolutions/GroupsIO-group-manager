@@ -388,7 +388,31 @@ final class SubgroupManagementPage {
 					)
 				)
 			);
-		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
+		} catch ( GroupsIoApiException $exception ) {
+			if ( self::is_hard_stop_error( $exception ) ) {
+				// unauthorized_error/inadequate_permissions is a hard-stop
+				// signal per security-sensitive.instructions.md, not an
+				// ordinary per-call failure to shrug off and continue past
+				// - every further Groups.io call in this render would fail
+				// identically, so stop here rather than making more of them.
+				printf(
+					'<div class="notice notice-error"><p>%s</p></div>',
+					esc_html(
+						sprintf(
+							/* translators: %s: friendly error detail. */
+							__( 'Could not access Groups.io: %s. Check the configured API credential.', 'bits-groupsio-sync' ),
+							self::friendly_error( $exception )
+						)
+					)
+				);
+				return;
+			}
+
+			// Non-fatal for any other error type: the list below is the
+			// primary content of this view, and its own get_subgroups()
+			// call below may still succeed independently.
+			echo '<p>' . esc_html__( 'Parent group: (could not be loaded)', 'bits-groupsio-sync' ) . '</p>';
+		} catch ( GroupsIoTransportException $exception ) {
 			// Non-fatal: the list below is the primary content of this view.
 			echo '<p>' . esc_html__( 'Parent group: (could not be loaded)', 'bits-groupsio-sync' ) . '</p>';
 		}
@@ -850,6 +874,22 @@ final class SubgroupManagementPage {
 		$extra = $exception->get_extra();
 
 		return '' !== $extra ? $extra : __( 'an unexpected error occurred.', 'bits-groupsio-sync' );
+	}
+
+	/**
+	 * Whether a GroupsIoApiException represents a hard-stop signal per
+	 * `.github/instructions/security-sensitive.instructions.md`:
+	 * `unauthorized_error`/`inadequate_permissions` indicate the
+	 * configured API credential itself is broken or lacks permission,
+	 * not a per-call/per-item problem — every further Groups.io call in
+	 * the same request would fail identically, so a caller hitting this
+	 * should stop and alert rather than silently continuing past it.
+	 *
+	 * @param GroupsIoApiException $exception Caught exception.
+	 * @return bool
+	 */
+	private static function is_hard_stop_error( GroupsIoApiException $exception ): bool {
+		return in_array( $exception->get_error_type(), array( 'unauthorized_error', 'inadequate_permissions' ), true );
 	}
 
 	/**

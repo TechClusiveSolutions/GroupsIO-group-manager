@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Subgroup Management: the List view's parent-group lookup now treats `unauthorized_error`/`inadequate_permissions` as a hard-stop signal (per `security-sensitive.instructions.md`) - it previously treated every failure the same and proceeded to make further Groups.io calls that would fail identically.
+- `docs/index.md`'s usage overview no longer claims Feature Controls includes a working audit log - that recording/reading is deferred to a later phase, only the underlying table exists today.
 - Subgroup Management: the Details view's Update-form Name field carried autofocus unconditionally, so when the delete confirmation was also showing, both it and the confirmation button had autofocus - per the HTML spec only the first one in document order actually receives focus, silently defeating the confirmation button's. Name-field autofocus is now suppressed while confirming delete.
 - Subgroup Management: a Groups.io API/transport failure during the read-back checks used to validate a submitted subgroup id/slug (or to confirm a create/update/delete actually took effect) was indistinguishable from a genuine "not found" or "confirmed deleted" result - a failed check could be silently reported as success. Lookup failures now propagate and are reported as their own distinct failure, never collapsed into a false-positive result.
 - Subgroup Management: deleting an already-absent subgroup (e.g. a retried or duplicate delete request) now succeeds idempotently instead of returning a "not found" error, per this project's idempotent-tolerance requirement for Groups.io-touching operations.

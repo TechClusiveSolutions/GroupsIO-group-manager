@@ -23,22 +23,79 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Remaining responses queue_responses() hasn't handed out yet -
+	 * exposed so a test can call assert_queue_exhausted() to catch a
+	 * short-circuited implementation that returns success without
+	 * actually making every expected call.
+	 *
+	 * @var array<int, array<string, mixed>>
+	 */
+	private array $pending_responses = array();
+
+	/**
+	 * Every request queue_responses() intercepted, in order, so a test
+	 * can inspect a specific call's URL/body rather than only the last
+	 * one.
+	 *
+	 * @var array<int, array{url: string, args: array<string, mixed>}>
+	 */
+	private array $captured_requests = array();
+
+	/**
 	 * Queues a sequence of pre_http_request responses, one per call, in
-	 * the order they'll be requested.
+	 * the order they'll be requested. If a test under-queues responses
+	 * (fewer entries than the code under test actually requests), this
+	 * throws rather than falling through to $preempt (which would let a
+	 * real outbound HTTP request through) - a real network call from a
+	 * unit test must fail loudly and immediately, not run slow/flaky.
 	 */
 	private function queue_responses( array $responses ): void {
+		$this->pending_responses = $responses;
+		$this->captured_requests = array();
+
 		add_filter(
 			'pre_http_request',
-			static function ( $preempt, $parsed_args, $url ) use ( &$responses ) {
-				if ( empty( $responses ) ) {
-					return $preempt;
+			function ( $preempt, $parsed_args, $url ) {
+				$this->captured_requests[] = array(
+					'url'  => $url,
+					'args' => $parsed_args,
+				);
+
+				if ( empty( $this->pending_responses ) ) {
+					throw new \RuntimeException( "queue_responses() exhausted - the code under test made more HTTP requests than the test queued responses for (URL: {$url})." );
 				}
 
-				return array_shift( $responses );
+				return array_shift( $this->pending_responses );
 			},
 			10,
 			3
 		);
+	}
+
+	/**
+	 * Asserts every response passed to queue_responses() was actually
+	 * consumed - catches an implementation that short-circuits and
+	 * returns success without making every call a correct
+	 * implementation would.
+	 */
+	private function assert_queue_exhausted(): void {
+		$this->assertSame( array(), $this->pending_responses, 'Not every queued HTTP response was consumed by the code under test.' );
+	}
+
+	/**
+	 * Finds the first captured request whose URL contains the given
+	 * endpoint name.
+	 *
+	 * @return array{url: string, args: array<string, mixed>}|null
+	 */
+	private function captured_request_for( string $endpoint ): ?array {
+		foreach ( $this->captured_requests as $request ) {
+			if ( false !== strpos( $request['url'], $endpoint ) ) {
+				return $request;
+			}
+		}
+
+		return null;
 	}
 
 	private function json_response( int $status, array $body ): array {
@@ -253,6 +310,22 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		unset( $_POST['sub_group_name'], $_POST['title'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
 
 		$this->assertSame( 'created', $code );
+
+		// Every queued response must actually have been consumed - a
+		// short-circuited implementation that returns 'created' right
+		// after the first read-back, never calling updategroup at all,
+		// would otherwise still pass this test.
+		$this->assert_queue_exhausted();
+
+		$title_request = $this->captured_request_for( 'updategroup' );
+		$this->assertNotNull( $title_request, 'Expected a POST to updategroup to set the title.' );
+		$this->assertSame(
+			array(
+				'group_id' => 152999,
+				'title'    => 'New Title',
+			),
+			$title_request['args']['body']
+		);
 	}
 
 	public function test_process_create_api_failure_returns_friendly_detail(): void {
@@ -598,5 +671,26 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'Could not load subgroups', $output );
 		// Create must remain available during a list-load outage.
 		$this->assertStringContainsString( 'Create new subgroup', $output );
+	}
+
+	public function test_list_view_stops_after_a_hard_stop_error_instead_of_making_further_calls(): void {
+		// Only one response queued: get_group()'s. If the code
+		// incorrectly treats unauthorized_error as an ordinary,
+		// non-fatal error and proceeds to call get_subgroups() anyway,
+		// the queue will be exhausted and queue_responses() will throw -
+		// failing this test, since unauthorized_error/inadequate_permissions
+		// is a hard-stop signal per security-sensitive.instructions.md,
+		// not a per-call problem to shrug off and continue past.
+		$this->queue_responses( array(
+			$this->json_response( 400, array( 'object' => 'error', 'type' => 'unauthorized_error', 'extra' => '' ) ),
+		) );
+
+		ob_start();
+		SubgroupManagementPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'Could not access Groups.io', $output );
+		$this->assertStringNotContainsString( 'Create new subgroup', $output );
+		$this->assert_queue_exhausted();
 	}
 }
