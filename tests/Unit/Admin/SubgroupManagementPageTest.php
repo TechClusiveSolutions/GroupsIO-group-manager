@@ -328,6 +328,52 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		);
 	}
 
+	public function test_process_create_reports_desc_mismatch_distinctly_not_as_create_failed(): void {
+		$this->queue_responses( array(
+			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+new-subgroup' ) ),
+			// Read-back shows the subgroup exists, but its desc doesn't
+			// match what was submitted - e.g. Groups.io ignored or
+			// hasn't yet propagated the description.
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup', '', 'wrong description' ),
+			) ),
+		) );
+
+		$_POST['sub_group_name'] = 'new-subgroup';
+		$_POST['description']    = 'the real description';
+		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
+		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_create();
+
+		unset( $_POST['sub_group_name'], $_POST['description'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		// The subgroup itself was created and confirmed - reporting this
+		// as 'create_failed' would invite a retry that collides with the
+		// subgroup that already exists.
+		$this->assertSame( 'created_desc_failed', $code );
+	}
+
+	public function test_process_create_with_matching_description_succeeds(): void {
+		$this->queue_responses( array(
+			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+new-subgroup' ) ),
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup', '', 'matching description' ),
+			) ),
+		) );
+
+		$_POST['sub_group_name'] = 'new-subgroup';
+		$_POST['description']    = 'matching description';
+		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
+		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_create();
+
+		unset( $_POST['sub_group_name'], $_POST['description'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertSame( 'created', $code );
+	}
+
 	public function test_process_create_api_failure_returns_friendly_detail(): void {
 		$this->queue_responses( array(
 			$this->json_response( 400, array( 'object' => 'error', 'type' => 'bad_request', 'extra' => 'name already taken' ) ),

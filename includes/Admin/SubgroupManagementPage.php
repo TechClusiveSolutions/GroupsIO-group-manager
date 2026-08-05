@@ -50,6 +50,7 @@ final class SubgroupManagementPage {
 		'deleted'              => array( 'success', 'Subgroup deleted.' ),
 		'create_failed'        => array( 'error', 'Could not create the subgroup: %s' ),
 		'created_title_failed' => array( 'error', 'The subgroup was created, but its title could not be set: %s Find it in the list below and set the title from its Details page.' ),
+		'created_desc_failed'  => array( 'error', 'The subgroup was created, but its description could not be confirmed: %s Find it in the list below and check its Details page.' ),
 		'update_failed'        => array( 'error', 'Could not update the subgroup: %s' ),
 		'delete_failed'        => array( 'error', 'Could not delete the subgroup: %s' ),
 		'invalid_request'      => array( 'error', 'The request could not be processed. Please try again.' ),
@@ -179,6 +180,18 @@ final class SubgroupManagementPage {
 		}
 		if ( null === $created ) {
 			return array( 'create_failed', __( 'the subgroup could not be confirmed after creation. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
+		}
+
+		// The create read-back above only confirms the subgroup exists
+		// under the expected slug - it doesn't confirm Groups.io actually
+		// applied the submitted Description. Checked here, as a distinct
+		// 'created_desc_failed' outcome (not 'create_failed'), for the
+		// same reason a title-set failure isn't reported as a creation
+		// failure: the subgroup itself was already created and confirmed,
+		// so reporting it as a creation failure would invite a retry that
+		// collides with the subgroup that already exists.
+		if ( (string) ( $created['desc'] ?? '' ) !== $description ) {
+			return array( 'created_desc_failed', __( 'the description could not be confirmed. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
 		}
 
 		if ( '' === $title ) {

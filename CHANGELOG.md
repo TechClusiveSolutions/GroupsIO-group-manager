@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Subgroup Management: creating a subgroup with a Description now verifies via read-back that the description was actually applied, not just that the subgroup exists - a mismatch (e.g. Groups.io ignored or hasn't yet propagated it) is reported as a distinct "created, but description could not be confirmed" outcome rather than a plain creation failure, for the same reason a title-set failure isn't reported as `create_failed`.
 - Subgroup Management: the List view's parent-group lookup now treats `unauthorized_error`/`inadequate_permissions` as a hard-stop signal (per `security-sensitive.instructions.md`) - it previously treated every failure the same and proceeded to make further Groups.io calls that would fail identically.
 - `docs/index.md`'s usage overview no longer claims Feature Controls includes a working audit log - that recording/reading is deferred to a later phase, only the underlying table exists today.
 - Subgroup Management: the Details view's Update-form Name field carried autofocus unconditionally, so when the delete confirmation was also showing, both it and the confirmation button had autofocus - per the HTML spec only the first one in document order actually receives focus, silently defeating the confirmation button's. Name-field autofocus is now suppressed while confirming delete.
