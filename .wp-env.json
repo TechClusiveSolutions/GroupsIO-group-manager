@@ -4,6 +4,9 @@
     "plugins": [
         "."
     ],
+    "mappings": {
+        "wp-content/mu-plugins/groupsio-api-mock.php": "./tests/e2e/mu-plugins/groupsio-api-mock.php"
+    },
     "config": {
         "GROUPS_IO_API_KEY": "fake-local-dev-key-not-real",
         "GROUPS_IO_PARENT_GROUP": "bits-local-dev",
@@ -17,5 +20,7 @@
                 "GROUPS_IO_NOTIFICATION_EMAIL": "admin@example.test"
             }
         }
-    }
+    },
+    "port": 8888,
+    "testsPort": 8889
 }

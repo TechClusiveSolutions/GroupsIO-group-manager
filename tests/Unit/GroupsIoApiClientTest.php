@@ -146,6 +146,79 @@ b@example.test",
 		}
 	}
 
+	public function test_update_subgroup_sends_post_with_group_id_and_given_fields(): void {
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+renamed' ) ) );
+
+		GroupsIoApiClient::update_subgroup( 152999, array( 'name' => 'perception-is-all+renamed' ) );
+
+		$this->assertSame( 'POST', self::$last_request['args']['method'] );
+		$this->assertStringContainsString( 'updategroup', self::$last_request['url'] );
+		$this->assertSame(
+			array(
+				'group_id' => 152999,
+				'name'     => 'perception-is-all+renamed',
+			),
+			self::$last_request['args']['body']
+		);
+	}
+
+	public function test_update_subgroup_sends_only_the_provided_fields(): void {
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 152999 ) ) );
+
+		GroupsIoApiClient::update_subgroup( 152999, array( 'title' => 'New Title', 'desc' => 'New description' ) );
+
+		$this->assertSame(
+			array(
+				'group_id' => 152999,
+				'title'    => 'New Title',
+				'desc'     => 'New description',
+			),
+			self::$last_request['args']['body']
+		);
+	}
+
+	public function test_update_subgroup_ignores_unsupported_field_keys(): void {
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 152999 ) ) );
+
+		// A caller (or a bug) supplying 'group_id' inside $fields must
+		// not be able to override the $subgroup_id parameter and
+		// retarget the request.
+		GroupsIoApiClient::update_subgroup( 152999, array(
+			'title'    => 'New Title',
+			'group_id' => 999999,
+			'unknown'  => 'ignored',
+		) );
+
+		$this->assertSame(
+			array(
+				'group_id' => 152999,
+				'title'    => 'New Title',
+			),
+			self::$last_request['args']['body']
+		);
+	}
+
+	public function test_update_subgroup_duplicate_name_throws_api_exception(): void {
+		// Per the live docs' Additional Errors table for updategroup:
+		// bad_request / "name exists" is returned if the group name is
+		// already taken — matching the documented type/extra convention
+		// (type=bad_request, extra=human-readable detail), not a distinct
+		// "name_exists" type.
+		$this->mock_response( $this->json_response( 400, array(
+			'object' => 'error',
+			'type'   => 'bad_request',
+			'extra'  => 'name exists',
+		) ) );
+
+		try {
+			GroupsIoApiClient::update_subgroup( 152999, array( 'name' => 'perception-is-all+sociology' ) );
+			$this->fail( 'Expected GroupsIoApiException.' );
+		} catch ( GroupsIoApiException $exception ) {
+			$this->assertSame( 'bad_request', $exception->get_error_type() );
+			$this->assertSame( 'name exists', $exception->get_extra() );
+		}
+	}
+
 	public function test_get_group_sends_get_with_group_name_query_arg(): void {
 		$this->mock_response( $this->json_response( 200, array( 'object' => 'group' ) ) );
 

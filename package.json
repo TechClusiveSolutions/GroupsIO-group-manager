@@ -1,0 +1,13 @@
+{
+	"name": "bits-groupsio-sync-e2e",
+	"private": true,
+	"description": "Playwright E2E test tooling for the BITS Groups.io Group Manager plugin's admin UI. Not published; the plugin itself has no JS runtime dependency on this.",
+	"scripts": {
+		"e2e": "playwright test",
+		"e2e:report": "playwright show-report"
+	},
+	"devDependencies": {
+		"@playwright/test": "^1.47.0",
+		"@wordpress/env": "^10.0.0"
+	}
+}

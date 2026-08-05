@@ -156,3 +156,31 @@ jobs:
           GROUPS_IO_TEST_API_KEY: ${{ secrets.GROUPS_IO_TEST_API_KEY }}
           GROUPS_IO_TEST_PARENT_GROUP: ${{ vars.GROUPS_IO_TEST_PARENT_GROUP }}
         run: vendor/bin/phpunit -c phpunit.integration.xml.dist
+
+  e2e-tests:
+    name: E2E tests (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.0"
+          tools: composer
+      - run: composer install --no-progress --prefer-dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Start wp-env
+        run: npx wp-env start
+      - name: Run Playwright suite
+        run: npx playwright test
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

@@ -149,6 +149,44 @@ final class GroupsIoApiClient {
 	}
 
 	/**
+	 * Updates one or more of a subgroup's fields — a partial update, only
+	 * sending the keys the caller provides. Confirmed by live trial
+	 * (2026-08-04) that updategroup's `name` parameter (form
+	 * `ParentGroupName+SubGroupName`) performs a true rename — updates
+	 * `name`, `group_url`, `email_address`, and `subject_tag`
+	 * consistently. This is distinct from `title`, a separate cosmetic
+	 * display-only field that does *not* change the slug/URL/email/
+	 * subject-tag (also confirmed by live trial) — callers renaming a
+	 * subgroup must pass `name` (already composed as
+	 * `ParentGroupName+SubGroupName`), not `title`, or the rename will
+	 * silently do nothing. `desc` is also a valid key (documented,
+	 * unrelated to the address). See Groups.io-API-Reference.md section
+	 * 4.4 and docs/subgroup-crud-and-admin-pages-design.md section 9.
+	 *
+	 * @param int                  $subgroup_id Numeric subgroup ID.
+	 * @param array<string,string> $fields      Fields to change: any of `name` (full "parent+sub" form), `title`, `desc`.
+	 * @return array<string, mixed> Decoded response (the updated group object).
+	 *
+	 * @throws GroupsIoTransportException On a network-level failure or 5xx.
+	 * @throws GroupsIoRateLimitException On HTTP 429.
+	 * @throws GroupsIoApiException On any other non-2xx response.
+	 */
+	public static function update_subgroup( int $subgroup_id, array $fields ): array {
+		// Restrict to the documented, supported keys before merging —
+		// $fields is caller-supplied, and without this an accidental
+		// (or malicious) 'group_id' key in $fields would silently
+		// override the $subgroup_id parameter and retarget the request.
+		$allowed_fields = array_intersect_key( $fields, array_flip( array( 'name', 'title', 'desc' ) ) );
+
+		return self::request(
+			'POST',
+			'updategroup',
+			array(),
+			array_merge( array( 'group_id' => $subgroup_id ), $allowed_fields )
+		);
+	}
+
+	/**
 	 * Looks up a group or subgroup by its name string. Valid at the
 	 * parent/listing level (PRD section 4.2). Confirmed GET by live
 	 * trial against the test group (see
