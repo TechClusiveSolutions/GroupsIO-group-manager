@@ -146,10 +146,10 @@ b@example.test",
 		}
 	}
 
-	public function test_update_subgroup_sends_post_with_group_id_and_composed_name(): void {
+	public function test_update_subgroup_sends_post_with_group_id_and_given_fields(): void {
 		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+renamed' ) ) );
 
-		GroupsIoApiClient::update_subgroup( 152999, 'perception-is-all', 'renamed' );
+		GroupsIoApiClient::update_subgroup( 152999, array( 'name' => 'perception-is-all+renamed' ) );
 
 		$this->assertSame( 'POST', self::$last_request['args']['method'] );
 		$this->assertStringContainsString( 'updategroup', self::$last_request['url'] );
@@ -157,6 +157,21 @@ b@example.test",
 			array(
 				'group_id' => 152999,
 				'name'     => 'perception-is-all+renamed',
+			),
+			self::$last_request['args']['body']
+		);
+	}
+
+	public function test_update_subgroup_sends_only_the_provided_fields(): void {
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 152999 ) ) );
+
+		GroupsIoApiClient::update_subgroup( 152999, array( 'title' => 'New Title', 'desc' => 'New description' ) );
+
+		$this->assertSame(
+			array(
+				'group_id' => 152999,
+				'title'    => 'New Title',
+				'desc'     => 'New description',
 			),
 			self::$last_request['args']['body']
 		);
@@ -175,7 +190,7 @@ b@example.test",
 		) ) );
 
 		try {
-			GroupsIoApiClient::update_subgroup( 152999, 'perception-is-all', 'sociology' );
+			GroupsIoApiClient::update_subgroup( 152999, array( 'name' => 'perception-is-all+sociology' ) );
 			$this->fail( 'Expected GroupsIoApiException.' );
 		} catch ( GroupsIoApiException $exception ) {
 			$this->assertSame( 'bad_request', $exception->get_error_type() );

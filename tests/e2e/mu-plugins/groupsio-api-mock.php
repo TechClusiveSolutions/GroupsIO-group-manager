@@ -1,7 +1,7 @@
 <?php
 /**
  * E2E test-only mock for the Groups.io API, loaded as a wp-env mu-plugin
- * (see .wp-env.json's "mu-plugins" mapping - never bundled into the
+ * (see .wp-env.json's "mappings" mapping - never bundled into the
  * plugin's own distributed files or autoloaded in production).
  *
  * Intercepts pre_http_request for calls to groups.io/api and returns
@@ -30,12 +30,12 @@ if ( ! defined( 'GROUPS_IO_API_KEY' ) || ! in_array( GROUPS_IO_API_KEY, BITS_E2E
 
 /**
  * Seeds and returns the mock's in-memory (option-backed) subgroup list.
- * Seeded once with one fixture subgroup so list/view-members tests have
+ * Seeded once with one fixture subgroup so list/details tests have
  * something to see on a fresh environment; every other test either
  * resets this option (see tests/e2e/global-setup.ts) or builds on top
  * of it deterministically.
  *
- * @return array<int, array<string, mixed>>
+ * @return array<string, mixed>
  */
 function bits_e2e_mock_get_state(): array {
 	$state = get_option( BITS_E2E_MOCK_OPTION, null );
@@ -49,6 +49,7 @@ function bits_e2e_mock_get_state(): array {
 					'id'         => 200001,
 					'name'       => $parent . '+fixture-subgroup',
 					'title'      => '',
+					'desc'       => 'A seeded fixture subgroup for E2E tests.',
 					'subs_count' => 2,
 					'members'    => array(
 						array( 'id' => 300001, 'email' => 'fixture-member-1@example.test' ),
@@ -93,15 +94,32 @@ function bits_e2e_mock_error( string $type, string $extra = '' ): array {
 }
 
 /**
+ * Derives the "segment@parent.groups.io" address real Groups.io uses,
+ * from a stored "parent+segment" slug - matches the pattern confirmed
+ * by live trial (Groups.io-API-Reference.md section 4).
+ */
+function bits_e2e_mock_email_address( string $slug ): string {
+	$pos = strpos( $slug, '+' );
+	if ( false === $pos ) {
+		return $slug . '.groups.io';
+	}
+	$parent  = substr( $slug, 0, $pos );
+	$segment = substr( $slug, $pos + 1 );
+	return $segment . '@' . $parent . '.groups.io';
+}
+
+/**
  * @param array<string, mixed> $subgroup
  */
 function bits_e2e_mock_group_object( array $subgroup ): array {
 	return array(
-		'id'         => $subgroup['id'],
-		'object'     => 'group',
-		'name'       => $subgroup['name'],
-		'title'      => $subgroup['title'],
-		'subs_count' => $subgroup['subs_count'],
+		'id'            => $subgroup['id'],
+		'object'        => 'group',
+		'name'          => $subgroup['name'],
+		'title'         => $subgroup['title'],
+		'desc'          => $subgroup['desc'],
+		'subs_count'    => $subgroup['subs_count'],
+		'email_address' => bits_e2e_mock_email_address( $subgroup['name'] ),
 	);
 }
 
@@ -131,6 +149,18 @@ add_filter(
 		$state = bits_e2e_mock_get_state();
 
 		switch ( $endpoint ) {
+			case 'getgroup':
+				$parent = defined( 'GROUPS_IO_PARENT_GROUP' ) ? GROUPS_IO_PARENT_GROUP : 'bits-local-dev';
+				return bits_e2e_mock_response( 200, array(
+					'id'            => 999999,
+					'object'        => 'group',
+					'name'          => $parent,
+					'title'         => '',
+					'desc'          => 'E2E mock parent group.',
+					'subs_count'    => count( $state['subgroups'] ),
+					'email_address' => 'main@' . $parent . '.groups.io',
+				) );
+
 			case 'getsubgroups':
 				$rows = array_values( array_map( 'bits_e2e_mock_group_object', $state['subgroups'] ) );
 				return bits_e2e_mock_response( 200, array(
@@ -155,7 +185,7 @@ add_filter(
 
 				foreach ( $state['subgroups'] as $existing ) {
 					if ( $existing['name'] === $full_slug ) {
-						return bits_e2e_mock_error( 'subgroup_exists', 'sub_group_name already exists' );
+						return bits_e2e_mock_error( 'bad_request', 'name already taken' );
 					}
 				}
 
@@ -165,6 +195,7 @@ add_filter(
 					'id'         => $new_id,
 					'name'       => $full_slug,
 					'title'      => '',
+					'desc'       => (string) ( $params['desc'] ?? '' ),
 					'subs_count' => 1,
 					'members'    => array(),
 				);
@@ -192,6 +223,10 @@ add_filter(
 
 				if ( isset( $params['title'] ) ) {
 					$state['subgroups'][ $group_id ]['title'] = (string) $params['title'];
+				}
+
+				if ( isset( $params['desc'] ) ) {
+					$state['subgroups'][ $group_id ]['desc'] = (string) $params['desc'];
 				}
 
 				bits_e2e_mock_save_state( $state );

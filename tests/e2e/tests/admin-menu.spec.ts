@@ -35,10 +35,10 @@ test.describe( 'GroupsIO Management admin menu', () => {
 		await expect( page.locator( 'form[action="options.php"]' ) ).toBeVisible();
 	} );
 
-	test( 'Subgroup Management page loads', async ( { page } ) => {
+	test( 'Subgroup Management page loads on its List view', async ( { page } ) => {
 		await page.goto( '/wp-admin/admin.php?page=bits-groupsio-subgroup-management' );
 
 		await expect( page.getByRole( 'heading', { name: 'Subgroup Management', exact: true } ) ).toBeVisible();
-		await expect( page.getByRole( 'heading', { name: 'Create Subgroup' } ) ).toBeVisible();
+		await expect( page.getByRole( 'link', { name: 'Create new subgroup' } ) ).toBeVisible();
 	} );
 } );

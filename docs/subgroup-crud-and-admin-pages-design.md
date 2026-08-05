@@ -208,26 +208,23 @@ collisions with any leftover state from a prior partial run.
 
 ### 9. Page: Subgroup Management
 
-* Lists all subgroups under the configured parent group (via
-  `SubgroupIdCache` / `GroupsIoApiClient::get_subgroups()`), each with its
-  current member count and a "view members" expansion
-  (`GroupsIoApiClient::get_members()`) showing the actual member list for
-  that subgroup.
-* "Create subgroup" form: name/slug input, calls
-  `create_subgroup()` (section 3), then invalidates/refreshes
-  `SubgroupIdCache` so the new subgroup is immediately selectable elsewhere
-  in the plugin (e.g. the level-mandatory-groups meta box from Phase 1).
-* "Delete subgroup" action per row, with a confirmation step (WordPress's
-  standard `wp_nonce`-protected confirmation pattern), calling
-  `remove_subgroup()` and invalidating the cache entry for that subgroup.
-* "Update" (rename): **resolved 2026-08-04.** `updategroup` supports a
-  `name` parameter (form `ParentGroupName+SubGroupName`) that performs a
-  full rename — confirmed by live trial to update the subgroup's `name`,
-  `group_url`, `email_address`, and `subject_tag` consistently. This is
-  distinct from `title`, a separate cosmetic display-only field that does
-  **not** change the slug/URL/email/subject-tag (also confirmed by live
-  trial). The Subgroup Management page's rename action uses `name`, not
-  `title`.
+**Redesigned 2026-08-05**, per the primary contributor's explicit direction to prioritize a screen-reader-friendly, low-density layout over a single all-in-one page. Three distinct views instead of one combined list/create/rename/delete page:
+
+* **List view** (default, `?page=bits-groupsio-subgroup-management`):
+  * A count line ("N subgroups provisioned"), from the length of `GroupsIoApiClient::get_subgroups()`'s result.
+  * The parent group's own full address ("Parent group: `main@perception-is-all.groups.io`"), fetched via `GroupsIoApiClient::get_group()`'s `email_address` field.
+  * A single link to the Create view.
+  * A plain unordered list of subgroups, one link per subgroup, each link's visible text *and* accessible name being that subgroup's full `email_address` (e.g. `test-group-3@perception-is-all.groups.io`) - unique and unambiguous to a screen reader without needing a per-row `aria-label`, unlike the prior design's identically-labelled per-row controls. Member count shown as adjacent non-link text next to each entry, not folded into the link's accessible name.
+* **Create view** (`?page=bits-groupsio-subgroup-management&view=create`):
+  * Three fields: Name (required - the segment that determines the subgroup's address/URL, per `create_subgroup()`), Title (optional, cosmetic display label only - its field description explicitly states it does not affect the address), Description (optional).
+  * `createsubgroup` has no `title` parameter (confirmed against the live docs, section 4.1) - if Title is provided, creation is `create_subgroup()` followed immediately by an `update_subgroup()` call setting only `title`, both read-back-verified the same way rename already is.
+  * One "Create" button. On success, redirects to the List view (matching the existing create-flow pattern) with a success notice; invalidates/refreshes `SubgroupIdCache` so the new subgroup is immediately selectable elsewhere in the plugin (e.g. the level-mandatory-groups meta box from Phase 1).
+* **Details view** (`?page=bits-groupsio-subgroup-management&view=details&subgroup_id=N`):
+  * Editable Name/Title/Description fields, pre-filled with the subgroup's current values (fetched fresh, matched against the submitted id per the existing id/slug re-validation pattern from the prior design - still required, since this field set is still reachable via an editable hidden/query id).
+  * Below the editable fields: the live member list (read-only), moved here from the old design's per-row "view members" expansion - `GroupsIoApiClient::get_members()`, always read fresh, never cached.
+  * "Update" button: calls `update_subgroup()` with only the fields that actually changed (partial update - `name` change is a true rename per section 3/4.4 above and carries the existing "does not update any level's mandatory-groups list" warning; `title`/`desc` changes are purely cosmetic). Read-back verified the same way the prior design's rename action was.
+  * "Delete" button: reveals an inline confirmation (warning text + "Yes, delete"/"Cancel") on the same page - no separate confirmation page/step, per the same low-density-screen goal. Confirmed delete calls `remove_subgroup()`, read-back verified, invalidates the `SubgroupIdCache` entry, and redirects to the List view with a success notice.
+  * All Groups.io API errors surface in plain language, consistent with the prior design.
 
 ### 10. Page: User Assignment
 
