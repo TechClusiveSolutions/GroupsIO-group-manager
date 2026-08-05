@@ -27,6 +27,14 @@ if ( ! defined( 'ABSPATH' ) ) {
  * refresh, with the outcome passed as a fixed-vocabulary notice code in
  * the query string rather than free text, so nothing user-influenced
  * ends up unescaped in a redirect target.
+ *
+ * POST handling is registered on this page's `load-{$hook_suffix}`
+ * action (see GroupsIoManagementMenu::add_menu_pages()), not inside
+ * render(). WordPress's admin.php already prints the admin header/nav
+ * before a page's own render callback runs, so a wp_safe_redirect()
+ * issued from inside render() always fails with "headers already
+ * sent" on a real submission — load-{hook} fires early, before any
+ * output, which is the standard WordPress hook for exactly this.
  */
 final class SubgroupManagementPage {
 
@@ -44,12 +52,52 @@ final class SubgroupManagementPage {
 		'rename_failed'   => array( 'error', 'Could not rename the subgroup: %s' ),
 		'delete_failed'   => array( 'error', 'Could not delete the subgroup: %s' ),
 		'invalid_request' => array( 'error', 'The request could not be processed. Please try again.' ),
+		'not_found'       => array( 'error', 'That subgroup could not be found under the configured parent group. It may have already been renamed or deleted.' ),
 	);
 
 	/**
-	 * Renders the page. Callback for add_submenu_page(). Also handles
-	 * this page's own POST actions before rendering, since there is no
-	 * separate admin-post.php handler for this single-page feature.
+	 * Handles this page's own POST actions, if any, ending the request
+	 * via redirect + exit. Registered on `load-{$hook_suffix}` by
+	 * GroupsIoManagementMenu — fires before any admin HTML is output,
+	 * unlike render(), which WordPress always calls after the admin
+	 * header has already been printed.
+	 *
+	 * @return void
+	 * @codeCoverageIgnore Dispatch-then-exit wrapper; process_*() below carries the tested logic.
+	 */
+	public static function maybe_handle_post(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		$request_method = isset( $_SERVER['REQUEST_METHOD'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) : '';
+
+		if ( 'POST' !== $request_method ) {
+			return;
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- this only reads the action name to dispatch; each process_*() method below verifies its own nonce via check_admin_referer() before touching any other POST data or taking action.
+		$action = isset( $_POST['bits_groupsio_action'] ) ? sanitize_key( wp_unslash( $_POST['bits_groupsio_action'] ) ) : '';
+
+		switch ( $action ) {
+			case 'create':
+				list( $code, $detail ) = self::process_create();
+				break;
+			case 'rename':
+				list( $code, $detail ) = self::process_rename();
+				break;
+			case 'delete':
+				list( $code, $detail ) = self::process_delete();
+				break;
+			default:
+				list( $code, $detail ) = array( 'invalid_request', '' );
+		}
+
+		self::redirect_with_notice( $code, $detail );
+	}
+
+	/**
+	 * Renders the page. Callback for add_submenu_page().
 	 *
 	 * @return void
 	 */
@@ -58,60 +106,18 @@ final class SubgroupManagementPage {
 			return;
 		}
 
-		$request_method = isset( $_SERVER['REQUEST_METHOD'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) : '';
-
-		if ( 'POST' === $request_method ) {
-			self::handle_post();
-			return;
-		}
-
 		self::render_page();
 	}
 
 	/**
-	 * Dispatches a POST submission to the matching action handler, then
-	 * redirects back to this page with a notice code. Every branch below
-	 * ends the request (redirect + exit or a nonce-failure wp_die()) —
-	 * nothing falls through to render_page() on this code path.
-	 *
-	 * @return void
-	 */
-	private static function handle_post(): void {
-		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- this only reads the action name to dispatch; each handle_*() method below verifies its own nonce via check_admin_referer() before touching any POST data or taking action.
-		$action = isset( $_POST['bits_groupsio_action'] ) ? sanitize_key( wp_unslash( $_POST['bits_groupsio_action'] ) ) : '';
-
-		switch ( $action ) {
-			case 'create':
-				self::handle_create();
-				return;
-			case 'rename':
-				self::handle_rename();
-				return;
-			case 'delete':
-				self::handle_delete();
-				return;
-			default:
-				self::redirect_with_notice( 'invalid_request' );
-		}
-	}
-
-	/**
-	 * Handles the "Create subgroup" form submission.
-	 *
-	 * @return void
-	 */
-	private static function handle_create(): void {
-		list( $code, $detail ) = self::process_create();
-		self::redirect_with_notice( $code, $detail );
-	}
-
-	/**
 	 * The redirect-free half of "Create subgroup" handling: verifies the
-	 * nonce, calls the API, and returns the resulting notice code/detail
-	 * pair rather than redirecting — kept separate from handle_create()
-	 * (which does redirect + exit) purely so this branch is unit
-	 * testable without terminating the test process. Not part of this
-	 * class's rendering API; only called by handle_create() and tests.
+	 * nonce, calls the API, then re-fetches the subgroup list as a
+	 * read-back to confirm the new subgroup actually exists before
+	 * reporting success, per #34's acceptance criteria. Kept separate
+	 * from maybe_handle_post() (which redirects + exits) purely so this
+	 * branch is unit testable without terminating the test process. Not
+	 * part of this class's rendering API; only called by
+	 * maybe_handle_post() and tests.
 	 *
 	 * @return array{0: string, 1: string} Notice code and optional detail.
 	 */
@@ -133,29 +139,36 @@ final class SubgroupManagementPage {
 			return array( 'create_failed', __( 'a connection problem occurred.', 'bits-groupsio-sync' ) );
 		}
 
+		$expected_slug = self::parent_group() . '+' . $name;
+
+		// Defensive: clear any stale cache entry a previous, since-deleted
+		// subgroup with this same slug may have left behind, before the
+		// read-back below re-resolves it fresh.
+		SubgroupIdCache::invalidate( $expected_slug );
+
+		if ( null === self::find_subgroup_by_slug( $expected_slug ) ) {
+			return array( 'create_failed', __( 'the subgroup could not be confirmed after creation.', 'bits-groupsio-sync' ) );
+		}
+
 		return array( 'created', '' );
 	}
 
 	/**
-	 * Handles a "Rename subgroup" row form submission.
-	 *
-	 * @return void
-	 */
-	private static function handle_rename(): void {
-		list( $code, $detail ) = self::process_rename();
-		self::redirect_with_notice( $code, $detail );
-	}
-
-	/**
-	 * The redirect-free half of "Rename subgroup" handling. Invalidates
-	 * the SubgroupIdCache entry under the *old* slug on success — a
-	 * later lookup under the new slug resolves fresh from
-	 * get_subgroups() on its next miss. Does not touch any level's
-	 * stored mandatory-groups list (Phase 1's LevelMandatoryGroups is a
-	 * free-text field, not a live selector) — the limitation is
-	 * surfaced as description text in the rename form itself, not here.
-	 * See process_create() for why this is split out from
-	 * handle_rename() and public.
+	 * The redirect-free half of "Rename subgroup" handling. Re-fetches
+	 * the parent group's subgroup listing first and requires an exact
+	 * id+slug match before calling the API at all — the submitted
+	 * subgroup_id/old_slug come from editable hidden form fields, so
+	 * this confirms the target actually belongs to the configured
+	 * parent rather than trusting client-supplied identifiers for a
+	 * destructive-adjacent action. Re-fetches again afterward as a
+	 * read-back to confirm the rename actually took effect, per #34's
+	 * acceptance criteria. Invalidates the SubgroupIdCache entry under
+	 * the *old* slug on success — a later lookup under the new slug
+	 * resolves fresh from get_subgroups() on its next miss. Does not
+	 * touch any level's stored mandatory-groups list (Phase 1's
+	 * LevelMandatoryGroups is a free-text field, not a live selector) —
+	 * the limitation is surfaced as description text in the rename form
+	 * itself, not here.
 	 *
 	 * @return array{0: string, 1: string} Notice code and optional detail.
 	 */
@@ -166,8 +179,13 @@ final class SubgroupManagementPage {
 		$old_slug    = isset( $_POST['old_slug'] ) ? sanitize_text_field( wp_unslash( $_POST['old_slug'] ) ) : '';
 		$new_name    = isset( $_POST['new_subgroup_name'] ) ? sanitize_text_field( wp_unslash( $_POST['new_subgroup_name'] ) ) : '';
 
-		if ( 0 === $subgroup_id || '' === $new_name ) {
+		if ( 0 === $subgroup_id || '' === $old_slug || '' === $new_name ) {
 			return array( 'invalid_request', '' );
+		}
+
+		$existing = self::find_subgroup_by_id( $subgroup_id );
+		if ( null === $existing || $existing['name'] !== $old_slug ) {
+			return array( 'not_found', '' );
 		}
 
 		try {
@@ -178,29 +196,23 @@ final class SubgroupManagementPage {
 			return array( 'rename_failed', __( 'a connection problem occurred.', 'bits-groupsio-sync' ) );
 		}
 
-		if ( '' !== $old_slug ) {
-			SubgroupIdCache::invalidate( $old_slug );
+		SubgroupIdCache::invalidate( $old_slug );
+
+		$expected_slug = self::parent_group() . '+' . $new_name;
+		$after         = self::find_subgroup_by_id( $subgroup_id );
+		if ( null === $after || $after['name'] !== $expected_slug ) {
+			return array( 'rename_failed', __( 'the rename could not be confirmed.', 'bits-groupsio-sync' ) );
 		}
 
 		return array( 'renamed', '' );
 	}
 
 	/**
-	 * Handles the confirmed "Delete subgroup" form submission (the
-	 * second step of the nonce-protected confirmation flow — see
-	 * render_delete_confirmation()).
-	 *
-	 * @return void
-	 */
-	private static function handle_delete(): void {
-		list( $code, $detail ) = self::process_delete();
-		self::redirect_with_notice( $code, $detail );
-	}
-
-	/**
 	 * The redirect-free half of "Delete subgroup" handling. See
-	 * process_create() for why this is split out from handle_delete()
-	 * and public.
+	 * process_rename() for why the id+slug pair is re-validated against
+	 * a fresh listing before acting, and why a post-action read-back
+	 * confirms the outcome rather than trusting the write call's own
+	 * response.
 	 *
 	 * @return array{0: string, 1: string} Notice code and optional detail.
 	 */
@@ -210,8 +222,13 @@ final class SubgroupManagementPage {
 		$subgroup_id = isset( $_POST['subgroup_id'] ) ? absint( $_POST['subgroup_id'] ) : 0;
 		$slug        = isset( $_POST['slug'] ) ? sanitize_text_field( wp_unslash( $_POST['slug'] ) ) : '';
 
-		if ( 0 === $subgroup_id ) {
+		if ( 0 === $subgroup_id || '' === $slug ) {
 			return array( 'invalid_request', '' );
+		}
+
+		$existing = self::find_subgroup_by_id( $subgroup_id );
+		if ( null === $existing || $existing['name'] !== $slug ) {
+			return array( 'not_found', '' );
 		}
 
 		try {
@@ -222,8 +239,10 @@ final class SubgroupManagementPage {
 			return array( 'delete_failed', __( 'a connection problem occurred.', 'bits-groupsio-sync' ) );
 		}
 
-		if ( '' !== $slug ) {
-			SubgroupIdCache::invalidate( $slug );
+		SubgroupIdCache::invalidate( $slug );
+
+		if ( null !== self::find_subgroup_by_id( $subgroup_id ) ) {
+			return array( 'delete_failed', __( 'the deletion could not be confirmed.', 'bits-groupsio-sync' ) );
 		}
 
 		return array( 'deleted', '' );
@@ -331,7 +350,7 @@ final class SubgroupManagementPage {
 		);
 		printf(
 			'<td><input type="text" id="bits_groupsio_sub_group_name" name="sub_group_name" required aria-describedby="bits_groupsio_sub_group_name_description"%s /><p class="description" id="bits_groupsio_sub_group_name_description">%s</p></td>',
-			$autofocus_first_field ? ' autofocus' : '',
+			esc_attr( $autofocus_first_field ? ' autofocus' : '' ),
 			esc_html__( "Becomes part of the subgroup's list address and URL. Must be unique under the parent group.", 'bits-groupsio-sync' )
 		);
 		echo '</tr><tr>';
@@ -351,7 +370,12 @@ final class SubgroupManagementPage {
 
 	/**
 	 * Renders the subgroup list, with a per-row rename form, delete
-	 * link, and view-members expansion.
+	 * link, and view-members expansion. Every per-row control's
+	 * accessible name includes the subgroup's slug (via aria-label),
+	 * since visible text like "Rename" or "Delete subgroup" is
+	 * identical across every row and would otherwise be ambiguous to a
+	 * screen reader user navigating by links/buttons rather than
+	 * reading surrounding row context.
 	 *
 	 * @param array<int, array<string, mixed>> $rows            Subgroup objects from get_subgroups().
 	 * @param int                              $view_members_id Numeric subgroup id currently expanded, or 0.
@@ -387,22 +411,32 @@ final class SubgroupManagementPage {
 				)
 			);
 
-			$view_url = add_query_arg(
-				array(
-					'page'         => self::SLUG,
-					'view_members' => $id,
-				),
-				admin_url( 'admin.php' )
-			);
+			$expanded = $view_members_id === $id;
+			$view_url = $expanded
+				? remove_query_arg( 'view_members' )
+				: add_query_arg(
+					array(
+						'page'         => self::SLUG,
+						'view_members' => $id,
+					),
+					admin_url( 'admin.php' )
+				);
 			printf(
-				'<p><a href="%1$s">%2$s</a></p>',
+				'<p><a href="%1$s" aria-label="%2$s">%3$s</a></p>',
 				esc_url( $view_url ),
-				$view_members_id === $id
+				esc_attr(
+					$expanded
+						/* translators: %s: subgroup slug. */
+						? sprintf( __( 'Hide members for %s', 'bits-groupsio-sync' ), $slug )
+						/* translators: %s: subgroup slug. */
+						: sprintf( __( 'View members for %s', 'bits-groupsio-sync' ), $slug )
+				),
+				$expanded
 					? esc_html__( 'Hide members', 'bits-groupsio-sync' )
 					: esc_html__( 'View members', 'bits-groupsio-sync' )
 			);
 
-			if ( $view_members_id === $id ) {
+			if ( $expanded ) {
 				self::render_member_list( $id );
 			}
 
@@ -416,8 +450,15 @@ final class SubgroupManagementPage {
 				admin_url( 'admin.php' )
 			);
 			printf(
-				'<p><a href="%1$s" class="button">%2$s</a></p>',
+				'<p><a href="%1$s" class="button" aria-label="%2$s">%3$s</a></p>',
 				esc_url( $delete_url ),
+				esc_attr(
+					sprintf(
+						/* translators: %s: subgroup slug. */
+						__( 'Delete subgroup %s', 'bits-groupsio-sync' ),
+						$slug
+					)
+				),
 				esc_html__( 'Delete subgroup', 'bits-groupsio-sync' )
 			);
 
@@ -503,7 +544,19 @@ final class SubgroupManagementPage {
 			esc_attr( $current ),
 			esc_attr( $desc_id )
 		);
-		submit_button( __( 'Rename', 'bits-groupsio-sync' ), 'secondary', 'submit', false );
+		submit_button(
+			__( 'Rename', 'bits-groupsio-sync' ),
+			'secondary',
+			'submit',
+			false,
+			array(
+				'aria-label' => sprintf(
+					/* translators: %s: subgroup slug. */
+					__( 'Rename %s', 'bits-groupsio-sync' ),
+					$slug
+				),
+			)
+		);
 		printf(
 			'<p class="description" id="%1$s">%2$s</p>',
 			esc_attr( $desc_id ),
@@ -515,7 +568,12 @@ final class SubgroupManagementPage {
 	/**
 	 * Renders the nonce-protected delete confirmation step for one
 	 * subgroup, in place of the create form (the confirmation becomes
-	 * this view's primary action).
+	 * this view's primary action). Renders an error, with no delete
+	 * form, if the requested id doesn't match a subgroup in the
+	 * (possibly failed-to-load) $rows listing — a confirmation for an
+	 * unidentified target is not safe to present, per the same
+	 * id/slug-verification requirement process_delete() enforces
+	 * server-side.
 	 *
 	 * @param int                              $subgroup_id Numeric subgroup id to confirm deletion of.
 	 * @param array<int, array<string, mixed>> $rows        Subgroup objects from get_subgroups(), to look up the slug for display.
@@ -528,6 +586,14 @@ final class SubgroupManagementPage {
 				$slug = (string) ( $subgroup['name'] ?? '' );
 				break;
 			}
+		}
+
+		if ( '' === $slug ) {
+			printf(
+				'<div class="notice notice-error"><p>%s</p></div>',
+				esc_html__( 'That subgroup could not be found. It may have already been renamed or deleted, or the subgroup list failed to load.', 'bits-groupsio-sync' )
+			);
+			return;
 		}
 
 		echo '<div class="notice notice-warning">';
@@ -572,11 +638,70 @@ final class SubgroupManagementPage {
 	}
 
 	/**
+	 * Re-fetches the configured parent's subgroup listing and returns
+	 * the row matching the given numeric id, or null if not found (or
+	 * if the listing itself fails to load). Used both to validate that
+	 * a client-supplied subgroup_id actually belongs to the configured
+	 * parent before rename/delete act on it, and as the read-back that
+	 * confirms create/rename/delete actually took effect on Groups.io.
+	 *
+	 * @param int $subgroup_id Numeric subgroup id to look up.
+	 * @return array<string, mixed>|null
+	 */
+	private static function find_subgroup_by_id( int $subgroup_id ): ?array {
+		try {
+			$subgroups = GroupsIoApiClient::get_subgroups( self::parent_group() );
+		} catch ( GroupsIoApiException $exception ) {
+			return null;
+		} catch ( GroupsIoTransportException $exception ) {
+			return null;
+		}
+
+		foreach ( (array) ( $subgroups['data'] ?? array() ) as $subgroup ) {
+			if ( (int) ( $subgroup['id'] ?? 0 ) === $subgroup_id ) {
+				return $subgroup;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Same as find_subgroup_by_id(), but matches by full slug — used as
+	 * the post-create read-back, where the new subgroup's numeric id
+	 * isn't already known to the caller ahead of time.
+	 *
+	 * @param string $slug Full slug ("parent+sub" form) to look up.
+	 * @return array<string, mixed>|null
+	 */
+	private static function find_subgroup_by_slug( string $slug ): ?array {
+		try {
+			$subgroups = GroupsIoApiClient::get_subgroups( self::parent_group() );
+		} catch ( GroupsIoApiException $exception ) {
+			return null;
+		} catch ( GroupsIoTransportException $exception ) {
+			return null;
+		}
+
+		foreach ( (array) ( $subgroups['data'] ?? array() ) as $subgroup ) {
+			if ( ( $subgroup['name'] ?? null ) === $slug ) {
+				return $subgroup;
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * Formats a GroupsIoApiException as plain language, never a raw API
-	 * error dump, per #34's acceptance criteria. Uses the `extra` detail
-	 * when present (Groups.io's own human-readable detail string, per
-	 * Groups.io-API-Reference.md's documented error convention),
-	 * otherwise falls back to the error type.
+	 * error dump or machine-oriented error type/code, per #34's
+	 * acceptance criteria. Uses the `extra` detail when present
+	 * (Groups.io's own human-readable detail string, per
+	 * Groups.io-API-Reference.md's documented error convention) since
+	 * that's already written for a human reader; falls back to a
+	 * generic message rather than exposing the raw `type` value (e.g.
+	 * `group_not_found`), which is a machine-oriented token, not plain
+	 * language.
 	 *
 	 * @param GroupsIoApiException $exception Caught exception.
 	 * @return string
@@ -588,7 +713,7 @@ final class SubgroupManagementPage {
 
 		$extra = $exception->get_extra();
 
-		return '' !== $extra ? $extra : $exception->get_error_type();
+		return '' !== $extra ? $extra : __( 'an unexpected error occurred.', 'bits-groupsio-sync' );
 	}
 
 	/**
@@ -596,10 +721,15 @@ final class SubgroupManagementPage {
 	 * and exits. Never called with anything but a code from self::NOTICES
 	 * and, optionally, a plain-language detail string that is itself
 	 * escaped on output by render_notice(), never trusted as markup.
+	 * The detail is passed unencoded — add_query_arg() below already
+	 * URL-encodes every value it's given, so pre-encoding here would
+	 * double-encode it (e.g. a space would survive as a literal `%20`
+	 * in the displayed notice instead of decoding back to a space).
 	 *
 	 * @param string $code   One of the keys in self::NOTICES.
 	 * @param string $detail Optional detail to interpolate into the notice template.
 	 * @return void
+	 * @codeCoverageIgnore Calls exit; cannot run inside the test process. Its pure input-building logic is trivial (array literal + add_query_arg).
 	 */
 	private static function redirect_with_notice( string $code, string $detail = '' ): void {
 		$args = array(
@@ -608,7 +738,7 @@ final class SubgroupManagementPage {
 		);
 
 		if ( '' !== $detail ) {
-			$args['bits_notice_detail'] = rawurlencode( $detail );
+			$args['bits_notice_detail'] = $detail;
 		}
 
 		wp_safe_redirect( add_query_arg( $args, admin_url( 'admin.php' ) ) );

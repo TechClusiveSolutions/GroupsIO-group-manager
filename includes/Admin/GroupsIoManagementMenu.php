@@ -74,7 +74,7 @@ final class GroupsIoManagementMenu {
 			array( FeatureControlsPage::class, 'render' )
 		);
 
-		add_submenu_page(
+		$subgroup_management_hook = add_submenu_page(
 			self::SLUG_USER_ASSIGNMENT,
 			__( 'Subgroup Management', 'bits-groupsio-sync' ),
 			__( 'Subgroup Management', 'bits-groupsio-sync' ),
@@ -82,5 +82,17 @@ final class GroupsIoManagementMenu {
 			SubgroupManagementPage::SLUG,
 			array( SubgroupManagementPage::class, 'render' )
 		);
+
+		// SubgroupManagementPage handles its own POST actions on
+		// load-{$hook_suffix} rather than inside render(): WordPress
+		// always prints the admin header/nav before a page's render
+		// callback runs, so a redirect issued from inside render() on a
+		// real submission fails with "headers already sent" — the
+		// load-{hook} action fires before any output, which is the
+		// standard WordPress hook for a page's own early
+		// processing/redirect needs.
+		if ( false !== $subgroup_management_hook ) {
+			add_action( "load-{$subgroup_management_hook}", array( SubgroupManagementPage::class, 'maybe_handle_post' ) );
+		}
 	}
 }

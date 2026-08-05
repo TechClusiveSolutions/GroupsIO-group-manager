@@ -1,5 +1,5 @@
 ---
-applyTo: "includes/GroupsIoApiClient.php,includes/GroupsIoApiException.php,includes/GroupsIoRateLimitException.php,includes/GroupsIoTransportException.php,includes/SubgroupIdCache.php,includes/AuditLog.php,includes/Settings.php"
+applyTo: "includes/GroupsIoApiClient.php,includes/GroupsIoApiException.php,includes/GroupsIoRateLimitException.php,includes/GroupsIoTransportException.php,includes/SubgroupIdCache.php,includes/AuditLog.php,includes/Settings.php,includes/Admin/SubgroupManagementPage.php"
 ---
 
 # Security-Sensitive Code Instructions

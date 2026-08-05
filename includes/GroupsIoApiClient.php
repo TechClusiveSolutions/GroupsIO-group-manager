@@ -151,11 +151,11 @@ final class GroupsIoApiClient {
 	/**
 	 * Renames a subgroup. Confirmed by live trial (2026-08-04) that
 	 * updategroup's `name` parameter (form `ParentGroupName+SubGroupName`)
-	 * performs a true rename â updates `name`, `group_url`,
+	 * performs a true rename — updates `name`, `group_url`,
 	 * `email_address`, and `subject_tag` consistently. This is distinct
 	 * from `title`, a separate cosmetic display-only field that does
 	 * *not* change the slug/URL/email/subject-tag (also confirmed by live
-	 * trial) â `title` is intentionally not exposed here since it
+	 * trial) — `title` is intentionally not exposed here since it
 	 * would silently fail to do what an admin calling this "rename"
 	 * expects. See Groups.io-API-Reference.md section 4.4 and
 	 * docs/subgroup-crud-and-admin-pages-design.md section 9.

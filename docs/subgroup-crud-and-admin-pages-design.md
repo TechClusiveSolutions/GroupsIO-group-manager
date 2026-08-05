@@ -55,36 +55,35 @@ Explicitly not in scope for this pass (later phases):
 
 ### 3. Client Additions: `create_subgroup()` / `remove_subgroup()` — Resolved (see also section 9 for the later `update_subgroup()` / rename resolution)
 
-Per this project's established practice (`CLAUDE.md`, PRD section 9), the
-HTTP contract for these two operations must be confirmed by live trial
-against the test group before implementation, not assumed from public
-docs. **This has not yet happened.** Before implementation begins:
+Confirmed by live trial against the test group, per this project's
+established practice (`CLAUDE.md`, PRD section 9):
 
-* Verify the endpoint path, HTTP method, required parameters (expected:
-  something like `POST createsubgroup` with `group_name`/parent id and a
-  new subgroup name/slug; `POST removesubgroup` — or possibly `deletegroup`
-  — with a numeric subgroup `group_id`), and the exact response/error shape
-  on success and on failure (e.g., duplicate subgroup name, subgroup not
-  found, permission denied).
-* Confirm whether these dispatch through the same `{"object":"error",
-  "type":"..."}` error shape already handled by the existing exception
-  hierarchy, or introduce a new `type` value that needs to be added to the
-  dispatch tests (no new exception class expected — per the existing
-  design's flat-hierarchy rationale, an unrecognized `type` string already
-  surfaces correctly via `get_error_type()`).
+* `createsubgroup` — `POST`, parameters `group_name` (parent group slug),
+  `sub_group_name` (new subgroup's name segment), `desc` (optional
+  description), `accept_policies` (documented as required; live calls
+  succeeded without it, but the client always sends it anyway to match the
+  documented contract). Returns the full new group object on success,
+  including its numeric `id`.
+* Subgroup deletion has no separate endpoint — `removesubgroup` and
+  `deletesubgroup` both 404. `deletegroup` (`POST`, parameters `group_id`
+  and the literal string `understand` = `"I understand"`) deletes a group
+  *or* subgroup and is the only deletion endpoint. Returns HTTP 200 with an
+  empty body on success; works even while the subgroup still has members.
+* Both dispatch through the same `{"object":"error","type":"...","extra":"..."}`
+  error shape already handled by the existing exception hierarchy — no new
+  `type` value or exception class was needed; an unrecognized `type` string
+  already surfaces correctly via `get_error_type()`.
 
-Once verified, the two methods follow the existing client's conventions
-exactly (`includes/GroupsIoApiClient.php`, `public static`, same
-credential-handling and `WP_DEBUG` redacted-logging behavior as every other
-method):
+The two methods follow the existing client's conventions exactly
+(`includes/GroupsIoApiClient.php`, `public static`, same credential-handling
+and `WP_DEBUG` redacted-logging behavior as every other method):
 
-* `create_subgroup( string $parent_group_name, string $subgroup_name ): array`
-  — returns the decoded response (expected to include the new subgroup's
-  numeric `id`) on success.
+* `create_subgroup( string $parent_group_name, string $subgroup_name, string $description = '' ): array`
+  — returns the decoded response, including the new subgroup's numeric `id`,
+  on success.
 * `remove_subgroup( int $subgroup_id ): array` — deletes a subgroup by its
-  numeric ID. Single-ID per call, no batching, consistent with
-  `remove_member()`'s established one-call-per-target pattern unless live
-  trial shows otherwise.
+  numeric ID via `deletegroup`. Single-ID per call, no batching, consistent
+  with `remove_member()`'s established one-call-per-target pattern.
 
 ### 4. Suspend-State Investigation — Resolved; Implementation Deferred to Phase 6
 

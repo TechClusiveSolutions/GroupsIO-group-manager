@@ -165,7 +165,7 @@ b@example.test",
 	public function test_update_subgroup_duplicate_name_throws_api_exception(): void {
 		// Per the live docs' Additional Errors table for updategroup:
 		// bad_request / "name exists" is returned if the group name is
-		// already taken â matching the documented type/extra convention
+		// already taken — matching the documented type/extra convention
 		// (type=bad_request, extra=human-readable detail), not a distinct
 		// "name_exists" type.
 		$this->mock_response( $this->json_response( 400, array(
