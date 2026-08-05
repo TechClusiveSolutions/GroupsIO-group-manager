@@ -374,6 +374,45 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		$this->assertSame( 'created', $code );
 	}
 
+	public function test_process_create_still_sets_title_even_when_description_confirmation_fails(): void {
+		$this->queue_responses( array(
+			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+new-subgroup' ) ),
+			// Read-back: desc doesn't match what was submitted.
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup', '', 'wrong description' ),
+			) ),
+			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'title' => 'New Title' ) ),
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup', 'New Title', 'wrong description' ),
+			) ),
+		) );
+
+		$_POST['sub_group_name'] = 'new-subgroup';
+		$_POST['title']          = 'New Title';
+		$_POST['description']    = 'the real description';
+		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
+		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_create();
+
+		unset( $_POST['sub_group_name'], $_POST['title'], $_POST['description'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		// The description problem must not silently skip setting the
+		// title the admin also asked for.
+		$this->assertSame( 'created_desc_failed', $code );
+		$this->assert_queue_exhausted();
+
+		$title_request = $this->captured_request_for( 'updategroup' );
+		$this->assertNotNull( $title_request, 'Title must still be set even though description confirmation failed.' );
+		$this->assertSame(
+			array(
+				'group_id' => 152999,
+				'title'    => 'New Title',
+			),
+			$title_request['args']['body']
+		);
+	}
+
 	public function test_process_create_api_failure_returns_friendly_detail(): void {
 		$this->queue_responses( array(
 			$this->json_response( 400, array( 'object' => 'error', 'type' => 'bad_request', 'extra' => 'name already taken' ) ),

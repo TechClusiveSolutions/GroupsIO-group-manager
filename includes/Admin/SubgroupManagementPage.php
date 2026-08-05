@@ -184,35 +184,41 @@ final class SubgroupManagementPage {
 
 		// The create read-back above only confirms the subgroup exists
 		// under the expected slug - it doesn't confirm Groups.io actually
-		// applied the submitted Description. Checked here, as a distinct
-		// 'created_desc_failed' outcome (not 'create_failed'), for the
-		// same reason a title-set failure isn't reported as a creation
-		// failure: the subgroup itself was already created and confirmed,
-		// so reporting it as a creation failure would invite a retry that
-		// collides with the subgroup that already exists.
-		if ( (string) ( $created['desc'] ?? '' ) !== $description ) {
+		// applied the submitted Description. Recorded here rather than
+		// returned immediately: if a Title was also submitted, that must
+		// still be attempted below even if the description didn't
+		// confirm - returning early here would silently skip setting the
+		// title the admin also asked for.
+		$description_confirmed = (string) ( $created['desc'] ?? '' ) === $description;
+
+		if ( '' !== $title ) {
+			try {
+				GroupsIoApiClient::update_subgroup( (int) $created['id'], array( 'title' => $title ) );
+			} catch ( GroupsIoApiException $exception ) {
+				return array( 'created_title_failed', self::friendly_error( $exception ) );
+			} catch ( GroupsIoTransportException $exception ) {
+				return array( 'created_title_failed', __( 'a connection problem occurred while setting the title.', 'bits-groupsio-sync' ) );
+			}
+
+			try {
+				$with_title = self::fetch_subgroup_by_id( (int) $created['id'] );
+			} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
+				return self::lookup_failure_result( 'created_title_failed', $exception );
+			}
+			if ( null === $with_title || $with_title['title'] !== $title ) {
+				return array( 'created_title_failed', __( 'the title could not be confirmed after creation. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
+			}
+		}
+
+		// Reported last, and as a distinct 'created_desc_failed' outcome
+		// (not 'create_failed'), for the same reason a title-set failure
+		// isn't reported as a creation failure: the subgroup itself was
+		// already created and confirmed (and the title, if any, has now
+		// also been set), so reporting a plain creation failure would
+		// invite a retry that collides with the subgroup that already
+		// exists.
+		if ( ! $description_confirmed ) {
 			return array( 'created_desc_failed', __( 'the description could not be confirmed. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
-		}
-
-		if ( '' === $title ) {
-			return array( 'created', '' );
-		}
-
-		try {
-			GroupsIoApiClient::update_subgroup( (int) $created['id'], array( 'title' => $title ) );
-		} catch ( GroupsIoApiException $exception ) {
-			return array( 'created_title_failed', self::friendly_error( $exception ) );
-		} catch ( GroupsIoTransportException $exception ) {
-			return array( 'created_title_failed', __( 'a connection problem occurred while setting the title.', 'bits-groupsio-sync' ) );
-		}
-
-		try {
-			$with_title = self::fetch_subgroup_by_id( (int) $created['id'] );
-		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
-			return self::lookup_failure_result( 'created_title_failed', $exception );
-		}
-		if ( null === $with_title || $with_title['title'] !== $title ) {
-			return array( 'created_title_failed', __( 'the title could not be confirmed after creation. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
 		}
 
 		return array( 'created', '' );
