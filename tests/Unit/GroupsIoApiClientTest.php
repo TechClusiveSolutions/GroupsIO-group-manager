@@ -177,6 +177,27 @@ b@example.test",
 		);
 	}
 
+	public function test_update_subgroup_ignores_unsupported_field_keys(): void {
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 152999 ) ) );
+
+		// A caller (or a bug) supplying 'group_id' inside $fields must
+		// not be able to override the $subgroup_id parameter and
+		// retarget the request.
+		GroupsIoApiClient::update_subgroup( 152999, array(
+			'title'    => 'New Title',
+			'group_id' => 999999,
+			'unknown'  => 'ignored',
+		) );
+
+		$this->assertSame(
+			array(
+				'group_id' => 152999,
+				'title'    => 'New Title',
+			),
+			self::$last_request['args']['body']
+		);
+	}
+
 	public function test_update_subgroup_duplicate_name_throws_api_exception(): void {
 		// Per the live docs' Additional Errors table for updategroup:
 		// bad_request / "name exists" is returned if the group name is

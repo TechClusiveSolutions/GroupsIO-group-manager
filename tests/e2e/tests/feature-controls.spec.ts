@@ -9,15 +9,16 @@ test.describe( 'Feature Controls', () => {
 	test( 'every field has a native label and a visible description', async ( { page } ) => {
 		await page.goto( '/wp-admin/admin.php?page=bits-groupsio-feature-controls' );
 
-		await expect( page.getByLabel( /Grace period/ ) ).toBeVisible();
-		await expect( page.getByLabel( /Log retention/ ) ).toBeVisible();
-		await expect( page.getByLabel( /Kill switch/ ) ).toBeVisible();
-		await expect( page.getByLabel( /Global mandatory groups/ ) ).toBeVisible();
+		const labels = [ /Grace period/, /Log retention/, /Kill switch/, /Global mandatory groups/ ];
 
-		const gracePeriodField = page.getByLabel( /Grace period/ );
-		const describedBy = await gracePeriodField.getAttribute( 'aria-describedby' );
-		expect( describedBy ).toBeTruthy();
-		await expect( page.locator( `#${ describedBy }` ) ).toBeVisible();
+		for ( const label of labels ) {
+			const field = page.getByLabel( label );
+			await expect( field ).toBeVisible();
+
+			const describedBy = await field.getAttribute( 'aria-describedby' );
+			expect( describedBy, `${ label } should have an aria-describedby` ).toBeTruthy();
+			await expect( page.locator( `#${ describedBy }` ) ).toBeVisible();
+		}
 	} );
 
 	test( 'editing and saving a value persists it after reload', async ( { page } ) => {

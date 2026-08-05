@@ -172,11 +172,17 @@ final class GroupsIoApiClient {
 	 * @throws GroupsIoApiException On any other non-2xx response.
 	 */
 	public static function update_subgroup( int $subgroup_id, array $fields ): array {
+		// Restrict to the documented, supported keys before merging —
+		// $fields is caller-supplied, and without this an accidental
+		// (or malicious) 'group_id' key in $fields would silently
+		// override the $subgroup_id parameter and retarget the request.
+		$allowed_fields = array_intersect_key( $fields, array_flip( array( 'name', 'title', 'desc' ) ) );
+
 		return self::request(
 			'POST',
 			'updategroup',
 			array(),
-			array_merge( array( 'group_id' => $subgroup_id ), $fields )
+			array_merge( array( 'group_id' => $subgroup_id ), $allowed_fields )
 		);
 	}
 

@@ -470,4 +470,133 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		$this->assertSame( 'delete_failed', $code );
 		$this->assertStringContainsString( 'could not be confirmed', $detail );
 	}
+
+	public function test_process_delete_when_target_already_absent_is_idempotent_success(): void {
+		update_option( 'bits_groupsio_subgroup_cache', array( 'perception-is-all+already-gone' => 152362 ) );
+
+		// Pre-check listing succeeds but simply doesn't contain this id -
+		// simulates a retried/duplicate delete request after an earlier
+		// attempt already succeeded.
+		$this->queue_responses( array(
+			$this->subgroups_list_response( array() ),
+		) );
+
+		$_POST['subgroup_id']  = '152362';
+		$_POST['current_slug'] = 'perception-is-all+already-gone';
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_delete_subgroup' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_delete();
+
+		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertSame( 'deleted', $code );
+
+		$cache = get_option( 'bits_groupsio_subgroup_cache' );
+		$this->assertArrayNotHasKey( 'perception-is-all+already-gone', $cache );
+	}
+
+	public function test_process_delete_pre_check_lookup_failure_returns_delete_failed_not_deleted(): void {
+		$this->queue_responses( array(
+			$this->json_response( 400, array( 'object' => 'error', 'type' => 'unauthorized_error', 'extra' => '' ) ),
+		) );
+
+		$_POST['subgroup_id']  = '152363';
+		$_POST['current_slug'] = 'perception-is-all+whatever';
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_delete_subgroup' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_delete();
+
+		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		// A failed check must never be reported as a confirmed deletion.
+		$this->assertSame( 'delete_failed', $code );
+	}
+
+	public function test_process_create_title_failure_after_successful_creation_does_not_report_create_failed(): void {
+		$this->queue_responses( array(
+			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+new-subgroup' ) ),
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup' ),
+			) ),
+			$this->json_response( 400, array( 'object' => 'error', 'type' => 'bad_request', 'extra' => 'title rejected' ) ),
+		) );
+
+		$_POST['sub_group_name'] = 'new-subgroup';
+		$_POST['title']          = 'New Title';
+		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
+		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_create();
+
+		unset( $_POST['sub_group_name'], $_POST['title'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		// The subgroup itself was created and confirmed - reporting this
+		// as 'create_failed' would invite a retry that collides with the
+		// subgroup that already exists.
+		$this->assertSame( 'created_title_failed', $code );
+		$this->assertSame( 'title rejected', $detail );
+	}
+
+	public function test_process_update_pre_check_lookup_failure_returns_update_failed_not_not_found(): void {
+		$this->queue_responses( array(
+			$this->json_response( 400, array( 'object' => 'error', 'type' => 'unauthorized_error', 'extra' => '' ) ),
+		) );
+
+		$_POST['subgroup_id']    = '152360';
+		$_POST['current_slug']   = 'perception-is-all+sociology';
+		$_POST['sub_group_name'] = 'renamed';
+		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_update_subgroup' );
+		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_update();
+
+		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['sub_group_name'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		// A failed check must never be reported as "not found".
+		$this->assertSame( 'update_failed', $code );
+	}
+
+	public function test_details_view_suppresses_name_autofocus_while_confirming_delete(): void {
+		$_GET['view']           = 'details';
+		$_GET['subgroup_id']    = '152360';
+		$_GET['confirm_delete'] = '1';
+
+		$this->queue_responses( array(
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 152360, 'perception-is-all+sociology', '', '', 1 ),
+			) ),
+			$this->json_response( 200, array( 'object' => 'list', 'data' => array() ) ),
+		) );
+
+		ob_start();
+		SubgroupManagementPage::render();
+		$output = ob_get_clean();
+
+		unset( $_GET['view'], $_GET['subgroup_id'], $_GET['confirm_delete'] );
+
+		// Only the delete confirmation button's autofocus should be
+		// present - if the Name field also carries autofocus, the
+		// browser gives focus to whichever comes first in the DOM (the
+		// Name field), silently defeating the confirmation button's.
+		$this->assertStringNotContainsString( 'id="bits_groupsio_sub_group_name" name="sub_group_name" value="sociology" required aria-describedby="bits_groupsio_sub_group_name_description" autofocus', $output );
+		$this->assertStringContainsString( 'Yes, delete this subgroup', $output );
+	}
+
+	public function test_list_view_does_not_claim_zero_subgroups_when_load_fails(): void {
+		$this->queue_responses( array(
+			$this->json_response( 200, array( 'id' => 999, 'email_address' => 'main@perception-is-all.groups.io' ) ),
+			$this->json_response( 400, array( 'object' => 'error', 'type' => 'unauthorized_error', 'extra' => '' ) ),
+		) );
+
+		ob_start();
+		SubgroupManagementPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringNotContainsString( '0 subgroups provisioned.', $output );
+		$this->assertStringContainsString( 'Could not load subgroups', $output );
+		// Create must remain available during a list-load outage.
+		$this->assertStringContainsString( 'Create new subgroup', $output );
+	}
 }

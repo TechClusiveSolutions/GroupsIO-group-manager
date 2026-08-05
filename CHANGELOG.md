@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Subgroup Management: the Details view's Update-form Name field carried autofocus unconditionally, so when the delete confirmation was also showing, both it and the confirmation button had autofocus - per the HTML spec only the first one in document order actually receives focus, silently defeating the confirmation button's. Name-field autofocus is now suppressed while confirming delete.
+- Subgroup Management: a Groups.io API/transport failure during the read-back checks used to validate a submitted subgroup id/slug (or to confirm a create/update/delete actually took effect) was indistinguishable from a genuine "not found" or "confirmed deleted" result - a failed check could be silently reported as success. Lookup failures now propagate and are reported as their own distinct failure, never collapsed into a false-positive result.
+- Subgroup Management: deleting an already-absent subgroup (e.g. a retried or duplicate delete request) now succeeds idempotently instead of returning a "not found" error, per this project's idempotent-tolerance requirement for Groups.io-touching operations.
+- Subgroup Management: if creating a subgroup succeeds but a follow-up Title-setting call fails, this is now reported as a distinct "created, but title failed" outcome rather than a plain creation failure - the prior wording invited a retry that would have collided with the subgroup that already exists.
+- `GroupsIoApiClient::update_subgroup()`: $fields is now restricted to its documented keys (`name`, `title`, `desc`) before being merged into the request body, so an unexpected `group_id` key can no longer override the method's own $subgroup_id parameter and retarget the request.
+- Subgroup Management: renaming a subgroup now invalidates the `SubgroupIdCache` entry for both the old and the new slug, not just the old one - a stale entry for the destination slug (left behind by a different, since-deleted subgroup that once used that name) could otherwise survive the rename.
+- Subgroup Management: the List view no longer claims "0 subgroups provisioned" when the subgroup list actually failed to load - the count is now only shown after a successful load.
+- Subgroup Management: the Name field's description now includes the existing warning that renaming does not update any membership level's mandatory-groups list - previously only present on the old single-page design's rename form, dropped during the redesign.
+
 - `GroupsIoApiClient::direct_add()`: fixed two contract bugs found by
   live trial via the #32 integration test — emails must be
   newline-separated (comma-joined input was parsed by Groups.io as a

@@ -191,13 +191,20 @@ add_filter(
 
 				$new_id = $state['next_id'];
 				$state['next_id']++;
+				// Matches the confirmed createsubgroup contract: "A subscription
+				// is created for the user to the group with owner
+				// permissions" - the API-key-owning account becomes the
+				// subgroup's sole member/owner immediately, never an empty
+				// member list.
 				$state['subgroups'][ $new_id ] = array(
 					'id'         => $new_id,
 					'name'       => $full_slug,
 					'title'      => '',
 					'desc'       => (string) ( $params['desc'] ?? '' ),
 					'subs_count' => 1,
-					'members'    => array(),
+					'members'    => array(
+						array( 'id' => $new_id * 10, 'email' => 'e2e-owner@example.test' ),
+					),
 				);
 				bits_e2e_mock_save_state( $state );
 

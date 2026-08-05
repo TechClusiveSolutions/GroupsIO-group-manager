@@ -47,10 +47,10 @@ test( 'login through a full subgroup create/update/delete lifecycle', async ( { 
 		await expect( page.getByRole( 'link', { name: new RegExp( `${ initialName }@` ) } ) ).toBeVisible();
 	} );
 
-	await test.step( 'open its Details view and view its (empty) member list', async () => {
+	await test.step( 'open its Details view and view its member list (the API account is auto-added as owner on creation)', async () => {
 		await page.getByRole( 'link', { name: new RegExp( `${ initialName }@` ) } ).click();
 		await expect( page.getByRole( 'heading', { name: 'Subgroup Details' } ) ).toBeVisible();
-		await expect( page.getByText( 'No members.' ) ).toBeVisible();
+		await expect( page.getByText( 'e2e-owner@example.test' ) ).toBeVisible();
 	} );
 
 	await test.step( 'rename it via the Details view (another Groups.io update)', async () => {

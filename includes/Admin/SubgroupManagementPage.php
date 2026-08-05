@@ -45,14 +45,15 @@ final class SubgroupManagementPage {
 	private const NONCE_ACTION_DELETE = 'bits_groupsio_delete_subgroup';
 
 	private const NOTICES = array(
-		'created'         => array( 'success', 'Subgroup created.' ),
-		'updated'         => array( 'success', 'Subgroup updated.' ),
-		'deleted'         => array( 'success', 'Subgroup deleted.' ),
-		'create_failed'   => array( 'error', 'Could not create the subgroup: %s' ),
-		'update_failed'   => array( 'error', 'Could not update the subgroup: %s' ),
-		'delete_failed'   => array( 'error', 'Could not delete the subgroup: %s' ),
-		'invalid_request' => array( 'error', 'The request could not be processed. Please try again.' ),
-		'not_found'       => array( 'error', 'That subgroup could not be found under the configured parent group. It may have already been renamed or deleted.' ),
+		'created'              => array( 'success', 'Subgroup created.' ),
+		'updated'              => array( 'success', 'Subgroup updated.' ),
+		'deleted'              => array( 'success', 'Subgroup deleted.' ),
+		'create_failed'        => array( 'error', 'Could not create the subgroup: %s' ),
+		'created_title_failed' => array( 'error', 'The subgroup was created, but its title could not be set: %s Find it in the list below and set the title from its Details page.' ),
+		'update_failed'        => array( 'error', 'Could not update the subgroup: %s' ),
+		'delete_failed'        => array( 'error', 'Could not delete the subgroup: %s' ),
+		'invalid_request'      => array( 'error', 'The request could not be processed. Please try again.' ),
+		'not_found'            => array( 'error', 'That subgroup could not be found under the configured parent group. It may have already been renamed or deleted.' ),
 	);
 
 	/**
@@ -133,10 +134,15 @@ final class SubgroupManagementPage {
 	 * reporting success, per #34's acceptance criteria. If a Title was
 	 * provided, a follow-up update_subgroup() call sets it (createsubgroup
 	 * has no title parameter — confirmed against the live docs), also
-	 * read-back verified. Kept separate from maybe_handle_post() (which
-	 * redirects + exits) purely so this branch is unit testable without
-	 * terminating the test process. Not part of this class's rendering
-	 * API; only called by maybe_handle_post() and tests.
+	 * read-back verified — but reported via a distinct 'created_title_failed'
+	 * code rather than 'create_failed', since the subgroup itself was
+	 * already successfully created and confirmed by that point; reporting
+	 * it as a creation failure would invite a retry that collides with
+	 * the subgroup that already exists. Kept separate from
+	 * maybe_handle_post() (which redirects + exits) purely so this branch
+	 * is unit testable without terminating the test process. Not part of
+	 * this class's rendering API; only called by maybe_handle_post() and
+	 * tests.
 	 *
 	 * @return array{0: string, 1: string} Notice code and optional detail.
 	 */
@@ -166,24 +172,34 @@ final class SubgroupManagementPage {
 		// read-back below re-resolves it fresh.
 		SubgroupIdCache::invalidate( $expected_slug );
 
-		$created = self::find_subgroup_by_slug( $expected_slug );
+		try {
+			$created = self::fetch_subgroup_by_slug( $expected_slug );
+		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
+			return self::lookup_failure_result( 'create_failed', $exception );
+		}
 		if ( null === $created ) {
-			return array( 'create_failed', __( 'the subgroup could not be confirmed after creation.', 'bits-groupsio-sync' ) );
+			return array( 'create_failed', __( 'the subgroup could not be confirmed after creation. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
 		}
 
-		if ( '' !== $title ) {
-			try {
-				GroupsIoApiClient::update_subgroup( (int) $created['id'], array( 'title' => $title ) );
-			} catch ( GroupsIoApiException $exception ) {
-				return array( 'create_failed', self::friendly_error( $exception ) );
-			} catch ( GroupsIoTransportException $exception ) {
-				return array( 'create_failed', __( 'a connection problem occurred while setting the title.', 'bits-groupsio-sync' ) );
-			}
+		if ( '' === $title ) {
+			return array( 'created', '' );
+		}
 
-			$with_title = self::find_subgroup_by_id( (int) $created['id'] );
-			if ( null === $with_title || $with_title['title'] !== $title ) {
-				return array( 'create_failed', __( 'the title could not be confirmed after creation.', 'bits-groupsio-sync' ) );
-			}
+		try {
+			GroupsIoApiClient::update_subgroup( (int) $created['id'], array( 'title' => $title ) );
+		} catch ( GroupsIoApiException $exception ) {
+			return array( 'created_title_failed', self::friendly_error( $exception ) );
+		} catch ( GroupsIoTransportException $exception ) {
+			return array( 'created_title_failed', __( 'a connection problem occurred while setting the title.', 'bits-groupsio-sync' ) );
+		}
+
+		try {
+			$with_title = self::fetch_subgroup_by_id( (int) $created['id'] );
+		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
+			return self::lookup_failure_result( 'created_title_failed', $exception );
+		}
+		if ( null === $with_title || $with_title['title'] !== $title ) {
+			return array( 'created_title_failed', __( 'the title could not be confirmed after creation. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
 		}
 
 		return array( 'created', '' );
@@ -199,12 +215,14 @@ final class SubgroupManagementPage {
 	 * rename-capable action. Only the fields that actually changed are
 	 * sent (a true partial update). Re-fetches again afterward as a
 	 * read-back to confirm each changed field actually took effect, per
-	 * #34's acceptance criteria. Invalidates the SubgroupIdCache entry
-	 * under the *old* slug if the name changed. Does not touch any
-	 * level's stored mandatory-groups list (Phase 1's
-	 * LevelMandatoryGroups is a free-text field, not a live selector) —
-	 * the limitation is surfaced as description text in the Details
-	 * view itself, not here.
+	 * #34's acceptance criteria. If the name changed, invalidates the
+	 * SubgroupIdCache entry under *both* the old and new slug before the
+	 * write — the new slug also needs clearing in case an unrelated,
+	 * since-deleted subgroup previously used it and left a stale mapping
+	 * behind. Does not touch any level's stored mandatory-groups list
+	 * (Phase 1's LevelMandatoryGroups is a free-text field, not a live
+	 * selector) — the limitation is surfaced as description text on the
+	 * Name field itself, not here.
 	 *
 	 * @return array{0: string, 1: string} Notice code and optional detail.
 	 */
@@ -221,7 +239,11 @@ final class SubgroupManagementPage {
 			return array( 'invalid_request', '' );
 		}
 
-		$existing = self::find_subgroup_by_id( $subgroup_id );
+		try {
+			$existing = self::fetch_subgroup_by_id( $subgroup_id );
+		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
+			return self::lookup_failure_result( 'update_failed', $exception );
+		}
 		if ( null === $existing || $existing['name'] !== $current_slug ) {
 			return array( 'not_found', '' );
 		}
@@ -243,6 +265,11 @@ final class SubgroupManagementPage {
 			return array( 'updated', '' );
 		}
 
+		if ( isset( $fields['name'] ) ) {
+			SubgroupIdCache::invalidate( $current_slug );
+			SubgroupIdCache::invalidate( $expected_slug );
+		}
+
 		try {
 			GroupsIoApiClient::update_subgroup( $subgroup_id, $fields );
 		} catch ( GroupsIoApiException $exception ) {
@@ -251,17 +278,17 @@ final class SubgroupManagementPage {
 			return array( 'update_failed', __( 'a connection problem occurred.', 'bits-groupsio-sync' ) );
 		}
 
-		if ( isset( $fields['name'] ) ) {
-			SubgroupIdCache::invalidate( $current_slug );
+		try {
+			$after = self::fetch_subgroup_by_id( $subgroup_id );
+		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
+			return self::lookup_failure_result( 'update_failed', $exception );
 		}
-
-		$after = self::find_subgroup_by_id( $subgroup_id );
 		if ( null === $after ) {
-			return array( 'update_failed', __( 'the update could not be confirmed.', 'bits-groupsio-sync' ) );
+			return array( 'update_failed', __( 'the update could not be confirmed. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
 		}
 		foreach ( $fields as $key => $value ) {
 			if ( ( $after[ $key ] ?? null ) !== $value ) {
-				return array( 'update_failed', __( 'the update could not be confirmed.', 'bits-groupsio-sync' ) );
+				return array( 'update_failed', __( 'the update could not be confirmed. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
 			}
 		}
 
@@ -271,9 +298,16 @@ final class SubgroupManagementPage {
 	/**
 	 * The redirect-free half of "Delete subgroup" handling. See
 	 * process_update() for why the id+slug pair is re-validated against
-	 * a fresh listing before acting, and why a post-action read-back
-	 * confirms the outcome rather than trusting the write call's own
-	 * response.
+	 * a fresh listing before acting. If the pre-check finds the target
+	 * already absent entirely (not merely a slug mismatch), this treats
+	 * that as an already-achieved success rather than an error — a
+	 * retried or duplicate delete request shouldn't fail just because an
+	 * earlier attempt already succeeded, per this project's
+	 * idempotent-tolerance requirement for Groups.io-touching operations
+	 * (.github/instructions/security-sensitive.instructions.md). A slug
+	 * *mismatch* against a still-present id is kept as a genuine
+	 * 'not_found' result, since that indicates the id/slug pairing is
+	 * stale or was tampered with, not that the delete already happened.
 	 *
 	 * @return array{0: string, 1: string} Notice code and optional detail.
 	 */
@@ -287,8 +321,18 @@ final class SubgroupManagementPage {
 			return array( 'invalid_request', '' );
 		}
 
-		$existing = self::find_subgroup_by_id( $subgroup_id );
-		if ( null === $existing || $existing['name'] !== $slug ) {
+		try {
+			$existing = self::fetch_subgroup_by_id( $subgroup_id );
+		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
+			return self::lookup_failure_result( 'delete_failed', $exception );
+		}
+
+		if ( null === $existing ) {
+			SubgroupIdCache::invalidate( $slug );
+			return array( 'deleted', '' );
+		}
+
+		if ( $existing['name'] !== $slug ) {
 			return array( 'not_found', '' );
 		}
 
@@ -302,8 +346,13 @@ final class SubgroupManagementPage {
 
 		SubgroupIdCache::invalidate( $slug );
 
-		if ( null !== self::find_subgroup_by_id( $subgroup_id ) ) {
-			return array( 'delete_failed', __( 'the deletion could not be confirmed.', 'bits-groupsio-sync' ) );
+		try {
+			$after = self::fetch_subgroup_by_id( $subgroup_id );
+		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
+			return self::lookup_failure_result( 'delete_failed', $exception );
+		}
+		if ( null !== $after ) {
+			return array( 'delete_failed', __( 'the deletion could not be confirmed. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
 		}
 
 		return array( 'deleted', '' );
@@ -316,7 +365,9 @@ final class SubgroupManagementPage {
 	 * full address) — each link's text doubles as its accessible name,
 	 * so no per-row aria-label is needed to disambiguate rows, unlike
 	 * the prior single-page design's identically-labelled per-row
-	 * controls.
+	 * controls. The subgroup count is only shown when the listing
+	 * actually loaded — showing "0 subgroups provisioned" during a load
+	 * failure would misleadingly suggest every subgroup vanished.
 	 *
 	 * @return void
 	 */
@@ -342,9 +393,21 @@ final class SubgroupManagementPage {
 			echo '<p>' . esc_html__( 'Parent group: (could not be loaded)', 'bits-groupsio-sync' ) . '</p>';
 		}
 
+		$rows = null;
+
 		try {
 			$subgroups = GroupsIoApiClient::get_subgroups( self::parent_group() );
 			$rows      = (array) ( $subgroups['data'] ?? array() );
+			printf(
+				'<p>%s</p>',
+				esc_html(
+					sprintf(
+						/* translators: %d: number of subgroups. */
+						_n( '%d subgroup provisioned.', '%d subgroups provisioned.', count( $rows ), 'bits-groupsio-sync' ),
+						count( $rows )
+					)
+				)
+			);
 		} catch ( GroupsIoApiException $exception ) {
 			printf(
 				'<div class="notice notice-error"><p>%s</p></div>',
@@ -356,25 +419,12 @@ final class SubgroupManagementPage {
 					)
 				)
 			);
-			$rows = array();
 		} catch ( GroupsIoTransportException $exception ) {
 			printf(
 				'<div class="notice notice-error"><p>%s</p></div>',
 				esc_html__( 'Could not load subgroups: a connection problem occurred.', 'bits-groupsio-sync' )
 			);
-			$rows = array();
 		}
-
-		printf(
-			'<p>%s</p>',
-			esc_html(
-				sprintf(
-					/* translators: %d: number of subgroups. */
-					_n( '%d subgroup provisioned.', '%d subgroups provisioned.', count( $rows ), 'bits-groupsio-sync' ),
-					count( $rows )
-				)
-			)
-		);
 
 		printf(
 			'<p><a href="%1$s">%2$s</a></p>',
@@ -382,7 +432,7 @@ final class SubgroupManagementPage {
 			esc_html__( 'Create new subgroup', 'bits-groupsio-sync' )
 		);
 
-		if ( empty( $rows ) ) {
+		if ( null === $rows || empty( $rows ) ) {
 			return;
 		}
 
@@ -446,7 +496,13 @@ final class SubgroupManagementPage {
 	 * pre-filled with the subgroup's current values, its live member
 	 * list, and Update/Delete controls (Delete reveals an inline
 	 * confirmation on this same page rather than a separate
-	 * confirmation view, per the low-density-screen goal).
+	 * confirmation view, per the low-density-screen goal). While the
+	 * delete confirmation is showing, the Name field's autofocus is
+	 * suppressed so the confirmation button's autofocus is the only one
+	 * present on the page — per the HTML spec, only the first
+	 * `autofocus` element in document order actually receives focus, so
+	 * having both present at once silently defeated the confirmation
+	 * button's autofocus every time.
 	 *
 	 * @param int $subgroup_id Numeric subgroup id.
 	 * @return void
@@ -462,7 +518,32 @@ final class SubgroupManagementPage {
 			esc_html__( 'Back to Subgroup Management', 'bits-groupsio-sync' )
 		);
 
-		$subgroup = 0 === $subgroup_id ? null : self::find_subgroup_by_id( $subgroup_id );
+		$subgroup      = null;
+		$lookup_failed = '';
+
+		if ( 0 !== $subgroup_id ) {
+			try {
+				$subgroup = self::fetch_subgroup_by_id( $subgroup_id );
+			} catch ( GroupsIoApiException $exception ) {
+				$lookup_failed = self::friendly_error( $exception );
+			} catch ( GroupsIoTransportException $exception ) {
+				$lookup_failed = __( 'a connection problem occurred.', 'bits-groupsio-sync' );
+			}
+		}
+
+		if ( '' !== $lookup_failed ) {
+			printf(
+				'<div class="notice notice-error"><p>%s</p></div>',
+				esc_html(
+					sprintf(
+						/* translators: %s: friendly error detail. */
+						__( 'Could not load this subgroup: %s', 'bits-groupsio-sync' ),
+						$lookup_failed
+					)
+				)
+			);
+			return;
+		}
 
 		if ( null === $subgroup ) {
 			printf(
@@ -472,7 +553,8 @@ final class SubgroupManagementPage {
 			return;
 		}
 
-		$slug = (string) $subgroup['name'];
+		$slug       = (string) $subgroup['name'];
+		$confirming = self::is_confirming_delete();
 
 		echo '<form method="post">';
 		wp_nonce_field( self::NONCE_ACTION_UPDATE );
@@ -484,16 +566,26 @@ final class SubgroupManagementPage {
 			self::subgroup_name_segment( $slug ),
 			(string) $subgroup['title'],
 			(string) $subgroup['desc'],
-			true
+			! $confirming
 		);
 
 		submit_button( __( 'Update', 'bits-groupsio-sync' ) );
 		echo '</form>';
 
-		self::render_delete_section( $subgroup_id, $slug );
+		self::render_delete_section( $subgroup_id, $slug, $confirming );
 
 		echo '<h2>' . esc_html__( 'Members', 'bits-groupsio-sync' ) . '</h2>';
 		self::render_member_list( $subgroup_id );
+	}
+
+	/**
+	 * Whether the delete confirmation should currently be showing.
+	 *
+	 * @return bool
+	 */
+	private static function is_confirming_delete(): bool {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only navigation flag, no state change itself.
+		return isset( $_GET['confirm_delete'] ) && '1' === $_GET['confirm_delete'];
 	}
 
 	/**
@@ -503,11 +595,10 @@ final class SubgroupManagementPage {
 	 *
 	 * @param int    $subgroup_id Numeric subgroup id.
 	 * @param string $slug        Current full slug.
+	 * @param bool   $confirming  Whether the inline confirmation should render.
 	 * @return void
 	 */
-	private static function render_delete_section( int $subgroup_id, string $slug ): void {
-		$confirming = isset( $_GET['confirm_delete'] ) && '1' === $_GET['confirm_delete']; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only navigation flag, no state change itself.
-
+	private static function render_delete_section( int $subgroup_id, string $slug, bool $confirming ): void {
 		if ( ! $confirming ) {
 			printf(
 				'<p><a class="button" href="%s">%s</a></p>',
@@ -588,10 +679,10 @@ final class SubgroupManagementPage {
 	 * Renders the shared Name/Title/Description field markup used by
 	 * both the Create and Details views.
 	 *
-	 * @param string $name        Current/initial name segment (without the parent prefix).
-	 * @param string $title       Current/initial title.
-	 * @param string $description Current/initial description.
-	 * @param bool   $autofocus_name Whether the Name field should carry autofocus (it is always this view's first/primary field).
+	 * @param string $name           Current/initial name segment (without the parent prefix).
+	 * @param string $title          Current/initial title.
+	 * @param string $description    Current/initial description.
+	 * @param bool   $autofocus_name Whether the Name field should carry autofocus (suppressed on the Details view while the delete confirmation is showing, so its autofocus isn't defeated by this field's).
 	 * @return void
 	 */
 	private static function render_name_title_desc_fields( string $name, string $title, string $description, bool $autofocus_name ): void {
@@ -604,7 +695,7 @@ final class SubgroupManagementPage {
 			'<td><input type="text" id="bits_groupsio_sub_group_name" name="sub_group_name" value="%2$s" required aria-describedby="bits_groupsio_sub_group_name_description"%1$s /><p class="description" id="bits_groupsio_sub_group_name_description">%3$s</p></td>',
 			esc_attr( $autofocus_name ? ' autofocus' : '' ),
 			esc_attr( $name ),
-			esc_html__( "Determines the subgroup's list address and URL. Must be unique under the parent group.", 'bits-groupsio-sync' )
+			esc_html__( "Determines the subgroup's list address and URL. Must be unique under the parent group. If this is changed later, no membership level's mandatory-groups list referencing the previous address is updated automatically - those must be updated manually.", 'bits-groupsio-sync' )
 		);
 		echo '</tr><tr>';
 		printf(
@@ -673,21 +764,21 @@ final class SubgroupManagementPage {
 
 	/**
 	 * Re-fetches the configured parent's subgroup listing and returns
-	 * the row matching the given numeric id, or null if not found (or
-	 * if the listing itself fails to load). Used both to validate that
-	 * a client-supplied subgroup_id actually belongs to the configured
-	 * parent before update/delete act on it, and as the read-back that
-	 * confirms create/update/delete actually took effect on Groups.io.
+	 * the row matching the given numeric id, or null if genuinely not
+	 * present in that listing. Unlike an earlier version of this method,
+	 * a transport/API failure is *not* swallowed into the same null
+	 * return — it propagates, so callers can distinguish "confirmed not
+	 * present" from "couldn't check" (a failed check must never be
+	 * reported as a confirmed deletion, rename, or "not found").
 	 *
 	 * @param int $subgroup_id Numeric subgroup id to look up.
 	 * @return array<string, mixed>|null
+	 *
+	 * @throws GroupsIoApiException Propagated from the client on lookup failure.
+	 * @throws GroupsIoTransportException Propagated from the client on a transport failure.
 	 */
-	private static function find_subgroup_by_id( int $subgroup_id ): ?array {
-		try {
-			$subgroups = GroupsIoApiClient::get_subgroups( self::parent_group() );
-		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
-			return null;
-		}
+	private static function fetch_subgroup_by_id( int $subgroup_id ): ?array {
+		$subgroups = GroupsIoApiClient::get_subgroups( self::parent_group() );
 
 		foreach ( (array) ( $subgroups['data'] ?? array() ) as $subgroup ) {
 			if ( (int) ( $subgroup['id'] ?? 0 ) === $subgroup_id ) {
@@ -699,19 +790,18 @@ final class SubgroupManagementPage {
 	}
 
 	/**
-	 * Same as find_subgroup_by_id(), but matches by full slug — used as
+	 * Same as fetch_subgroup_by_id(), but matches by full slug — used as
 	 * the post-create read-back, where the new subgroup's numeric id
 	 * isn't already known to the caller ahead of time.
 	 *
 	 * @param string $slug Full slug ("parent+sub" form) to look up.
 	 * @return array<string, mixed>|null
+	 *
+	 * @throws GroupsIoApiException Propagated from the client on lookup failure.
+	 * @throws GroupsIoTransportException Propagated from the client on a transport failure.
 	 */
-	private static function find_subgroup_by_slug( string $slug ): ?array {
-		try {
-			$subgroups = GroupsIoApiClient::get_subgroups( self::parent_group() );
-		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
-			return null;
-		}
+	private static function fetch_subgroup_by_slug( string $slug ): ?array {
+		$subgroups = GroupsIoApiClient::get_subgroups( self::parent_group() );
 
 		foreach ( (array) ( $subgroups['data'] ?? array() ) as $subgroup ) {
 			if ( ( $subgroup['name'] ?? null ) === $slug ) {
@@ -720,6 +810,24 @@ final class SubgroupManagementPage {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Converts a caught lookup-failure exception (from fetch_subgroup_by_id()/
+	 * fetch_subgroup_by_slug()) into a notice code/detail pair, keeping
+	 * every process_*() method's catch block for this case one line
+	 * instead of duplicating the API-vs-transport branch everywhere.
+	 *
+	 * @param string                                          $code      Notice code to use (e.g. 'delete_failed').
+	 * @param GroupsIoApiException|GroupsIoTransportException $exception Caught exception.
+	 * @return array{0: string, 1: string}
+	 */
+	private static function lookup_failure_result( string $code, $exception ): array {
+		if ( $exception instanceof GroupsIoApiException ) {
+			return array( $code, self::friendly_error( $exception ) );
+		}
+
+		return array( $code, __( 'a connection problem occurred while verifying the subgroup.', 'bits-groupsio-sync' ) );
 	}
 
 	/**
