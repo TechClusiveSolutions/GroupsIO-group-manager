@@ -21,7 +21,11 @@ Before this plugin, keeping BITS's Groups.io mailing lists in sync with actual p
 
 This plugin does not introduce its own mailing-list preference form — members choose and update which lists they want to join entirely through PMPro's existing profile fields, unrelated to this plugin. Once that preference data exists, this plugin takes over automatically: it reacts to PMPro membership events in the background and keeps Groups.io in sync, with no day-to-day action required from members or administrators.
 
-Administrators interact with the plugin through a settings screen for its own operational configuration — mandatory mailing lists, the grace period before removal on a lapsed membership, log retention, and an emergency kill switch to halt all sync activity — plus an audit log of every add/remove action the plugin has taken.
+Administrators interact with the plugin through a "GroupsIO Management" admin menu, with three pages:
+
+* **Feature Controls** — the plugin's own operational configuration: mandatory mailing lists, the grace period before removal on a lapsed membership, log retention, and an emergency kill switch to halt all sync activity, plus an audit log of every add/remove action the plugin has taken.
+* **Subgroup Management** — direct administration of the underlying Groups.io subgroups themselves (as opposed to member sync, which is automatic): a list of every subgroup showing its full address and member count, a page to create a new subgroup (name, an optional cosmetic title, and an optional description), and a details page per subgroup to view its live member list, edit its name/title/description, and delete it.
+* **User Assignment** — not yet available; will let an administrator manually add, remove, or suspend a specific member's subgroup access for intervention when automation misbehaves.
 
 ## Where to Go Next
 
