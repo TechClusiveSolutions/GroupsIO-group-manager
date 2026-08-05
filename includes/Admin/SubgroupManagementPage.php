@@ -44,18 +44,33 @@ final class SubgroupManagementPage {
 	private const NONCE_ACTION_UPDATE = 'bits_groupsio_update_subgroup';
 	private const NONCE_ACTION_DELETE = 'bits_groupsio_delete_subgroup';
 
-	private const NOTICES = array(
-		'created'              => array( 'success', 'Subgroup created.' ),
-		'updated'              => array( 'success', 'Subgroup updated.' ),
-		'deleted'              => array( 'success', 'Subgroup deleted.' ),
-		'create_failed'        => array( 'error', 'Could not create the subgroup: %s' ),
-		'created_title_failed' => array( 'error', 'The subgroup was created, but its title could not be set: %s Find it in the list below and set the title from its Details page.' ),
-		'created_desc_failed'  => array( 'error', 'The subgroup was created, but its description could not be confirmed: %s Find it in the list below and check its Details page.' ),
-		'update_failed'        => array( 'error', 'Could not update the subgroup: %s' ),
-		'delete_failed'        => array( 'error', 'Could not delete the subgroup: %s' ),
-		'invalid_request'      => array( 'error', 'The request could not be processed. Please try again.' ),
-		'not_found'            => array( 'error', 'That subgroup could not be found under the configured parent group. It may have already been renamed or deleted.' ),
-	);
+	/**
+	 * Returns this page's fixed notice vocabulary as {code: [type,
+	 * translated template]}, keyed the same way self::NOTICES used to be.
+	 * A method rather than a class constant so every template goes
+	 * through __() - class constants can't call functions.
+	 *
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	private static function notices(): array {
+		return array(
+			'created'              => array( 'success', __( 'Subgroup created.', 'bits-groupsio-sync' ) ),
+			'updated'              => array( 'success', __( 'Subgroup updated.', 'bits-groupsio-sync' ) ),
+			'deleted'              => array( 'success', __( 'Subgroup deleted.', 'bits-groupsio-sync' ) ),
+			/* translators: %s: plain-language detail of why the create request failed. */
+			'create_failed'        => array( 'error', __( 'Could not create the subgroup: %s', 'bits-groupsio-sync' ) ),
+			/* translators: %s: plain-language detail of why the title could not be set. */
+			'created_title_failed' => array( 'error', __( 'The subgroup was created, but its title could not be set: %s Find it in the list below and set the title from its Details page.', 'bits-groupsio-sync' ) ),
+			/* translators: %s: plain-language detail of why the description could not be confirmed. */
+			'created_desc_failed'  => array( 'error', __( 'The subgroup was created, but its description could not be confirmed: %s Find it in the list below and check its Details page.', 'bits-groupsio-sync' ) ),
+			/* translators: %s: plain-language detail of why the update request failed. */
+			'update_failed'        => array( 'error', __( 'Could not update the subgroup: %s', 'bits-groupsio-sync' ) ),
+			/* translators: %s: plain-language detail of why the delete request failed. */
+			'delete_failed'        => array( 'error', __( 'Could not delete the subgroup: %s', 'bits-groupsio-sync' ) ),
+			'invalid_request'      => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
+			'not_found'            => array( 'error', __( 'That subgroup could not be found under the configured parent group. It may have already been renamed or deleted.', 'bits-groupsio-sync' ) ),
+		);
+	}
 
 	/**
 	 * Handles this page's own POST actions, if any, ending the request
@@ -208,6 +223,12 @@ final class SubgroupManagementPage {
 			if ( null === $with_title || $with_title['title'] !== $title ) {
 				return array( 'created_title_failed', __( 'the title could not be confirmed after creation. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
 			}
+
+			// The title read-back above is a fresher listing than the
+			// one the description check above was based on - if the
+			// description had actually propagated by now, don't report
+			// a stale failure.
+			$description_confirmed = (string) ( $with_title['desc'] ?? '' ) === $description;
 		}
 
 		// Reported last, and as a distinct 'created_desc_failed' outcome
@@ -772,11 +793,13 @@ final class SubgroupManagementPage {
 	private static function render_notice(): void {
 		$code = isset( $_GET['bits_notice'] ) ? sanitize_key( wp_unslash( $_GET['bits_notice'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only display of a fixed-vocabulary code, no state change.
 
-		if ( '' === $code || ! isset( self::NOTICES[ $code ] ) ) {
+		$notices = self::notices();
+
+		if ( '' === $code || ! isset( $notices[ $code ] ) ) {
 			return;
 		}
 
-		list( $type, $template ) = self::NOTICES[ $code ];
+		list( $type, $template ) = $notices[ $code ];
 
 		$message = $template;
 		if ( false !== strpos( $template, '%s' ) ) {
@@ -865,7 +888,7 @@ final class SubgroupManagementPage {
 	 * @param GroupsIoApiException|GroupsIoTransportException $exception Caught exception.
 	 * @return array{0: string, 1: string}
 	 */
-	private static function lookup_failure_result( string $code, $exception ): array {
+	private static function lookup_failure_result( string $code, GroupsIoApiException|GroupsIoTransportException $exception ): array {
 		if ( $exception instanceof GroupsIoApiException ) {
 			return array( $code, self::friendly_error( $exception ) );
 		}
@@ -914,14 +937,14 @@ final class SubgroupManagementPage {
 	/**
 	 * Redirects to the given URL with a fixed-vocabulary notice code
 	 * and exits. Never called with anything but a code from
-	 * self::NOTICES and, optionally, a plain-language detail string
+	 * self::notices() and, optionally, a plain-language detail string
 	 * that is itself escaped on output by render_notice(), never
 	 * trusted as markup. The detail is passed unencoded — add_query_arg()
 	 * already URL-encodes every value it's given, so pre-encoding here
 	 * would double-encode it.
 	 *
 	 * @param string $target_url Base URL to redirect to (list_url()/details_url()).
-	 * @param string $code       One of the keys in self::NOTICES.
+	 * @param string $code       One of the keys in self::notices().
 	 * @param string $detail     Optional detail to interpolate into the notice template.
 	 * @return void
 	 * @codeCoverageIgnore Calls exit; cannot run inside the test process. Its pure input-building logic is trivial (array literal + add_query_arg).

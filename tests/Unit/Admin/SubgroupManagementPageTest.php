@@ -413,6 +413,38 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		);
 	}
 
+	public function test_process_create_reports_success_when_description_propagates_by_the_second_read_back(): void {
+		$this->queue_responses( array(
+			$this->json_response( 200, array( 'object' => 'group', 'id' => 152998, 'name' => 'perception-is-all+another-subgroup' ) ),
+			// First read-back: description hasn't propagated yet.
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 152998, 'perception-is-all+another-subgroup', '', '' ),
+			) ),
+			$this->json_response( 200, array( 'object' => 'group', 'id' => 152998, 'title' => 'New Title' ) ),
+			// Second read-back (after the title update): the description has
+			// now propagated - this must not be reported as a stale failure.
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 152998, 'perception-is-all+another-subgroup', 'New Title', 'the real description' ),
+			) ),
+		) );
+
+		$_POST['sub_group_name'] = 'another-subgroup';
+		$_POST['title']          = 'New Title';
+		$_POST['description']    = 'the real description';
+		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
+		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_create();
+
+		unset( $_POST['sub_group_name'], $_POST['title'], $_POST['description'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		// The description check must be re-evaluated against the later,
+		// fresher read-back taken after the title update, not left stuck
+		// on the stale first read-back's mismatch.
+		$this->assertSame( 'created', $code );
+		$this->assert_queue_exhausted();
+	}
+
 	public function test_process_create_api_failure_returns_friendly_detail(): void {
 		$this->queue_responses( array(
 			$this->json_response( 400, array( 'object' => 'error', 'type' => 'bad_request', 'extra' => 'name already taken' ) ),
