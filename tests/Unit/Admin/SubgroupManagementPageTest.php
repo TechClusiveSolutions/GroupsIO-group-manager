@@ -709,6 +709,33 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		$this->assertArrayNotHasKey( 'perception-is-all+already-gone', $cache );
 	}
 
+	public function test_process_delete_does_not_report_success_when_target_id_absent_but_slug_reused(): void {
+		update_option( 'bits_groupsio_subgroup_cache', array( 'perception-is-all+reused-slug' => 152365 ) );
+
+		// The submitted id (152365) is gone, but the slug is now in use by a
+		// different, current subgroup (a new id) - a missing id alone must
+		// not be treated as "this delete already happened", since that
+		// would falsely report success and invalidate a cache entry that
+		// now correctly points at the live subgroup.
+		$this->queue_responses( array(
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 999999, 'perception-is-all+reused-slug' ),
+			) ),
+		) );
+
+		$_POST['subgroup_id']  = '152365';
+		$_POST['current_slug'] = 'perception-is-all+reused-slug';
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_delete_subgroup' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		list( $code, $detail ) = SubgroupManagementPage::process_delete();
+
+		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertSame( 'not_found', $code );
+		$this->assert_queue_exhausted();
+	}
+
 	public function test_process_delete_treats_group_not_found_from_delete_call_as_idempotent_success(): void {
 		update_option( 'bits_groupsio_subgroup_cache', array( 'perception-is-all+racing' => 152370 ) );
 

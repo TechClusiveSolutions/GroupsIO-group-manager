@@ -362,12 +362,33 @@ final class SubgroupManagementPage {
 		}
 
 		try {
-			$existing = self::fetch_subgroup_by_id( $subgroup_id );
+			$subgroups = GroupsIoApiClient::get_subgroups( self::parent_group() );
 		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
 			return self::lookup_failure_result( 'delete_failed', $exception );
 		}
 
+		$rows      = (array) ( $subgroups['data'] ?? array() );
+		$existing  = null;
+		$slug_used = false;
+		foreach ( $rows as $row ) {
+			if ( (int) ( $row['id'] ?? 0 ) === $subgroup_id ) {
+				$existing = $row;
+			}
+			if ( ( $row['name'] ?? null ) === $slug ) {
+				$slug_used = true;
+			}
+		}
+
 		if ( null === $existing ) {
+			// A missing id alone doesn't prove *this* delete already
+			// happened - if the slug is now in use by a different,
+			// current subgroup (e.g. the old one was deleted and its
+			// slug got reused), that's not the same delete completing,
+			// so don't report success or invalidate a cache entry that
+			// now points at a live subgroup.
+			if ( $slug_used ) {
+				return array( 'not_found', '' );
+			}
 			SubgroupIdCache::invalidate( $slug );
 			return array( 'deleted', '' );
 		}
