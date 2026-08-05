@@ -20,12 +20,14 @@ In scope for this pass:
 
 * `GroupsIoApiClient::create_subgroup()` and `::remove_subgroup()`.
 * Live verification of the create/remove-subgroup HTTP contract against the
-  test group — **not yet done**, unlike the rest of the client's contract
-  (see section 3 below).
+  test group — **resolved** (see section 3 below), along with the later
+  update/rename contract (section 9).
 * Investigation of whether Groups.io exposes a real per-member
   moderation/suspend state on a subgroup, distinct from full removal —
-  **not yet done**; this document specifies how the User Assignment page
-  behaves in either outcome (section 6).
+  **resolved** (see section 4): native `banmember` is broken server-side;
+  the fallback is `remove_member()` plus the sticky-override flag. This
+  document specifies how the User Assignment page behaves as a result
+  (section 6).
 * A permanent CI-automated integration test exercising create → add → remove →
   delete against the test group.
 * The "GroupsIO Management" admin menu category and its three pages: User
