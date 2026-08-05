@@ -20,3 +20,8 @@
 # OS/editor cruft
 .DS_Store
 Thumbs.db
+
+# Playwright E2E
+/tests/e2e/.auth/
+/playwright-report/
+/test-results/
