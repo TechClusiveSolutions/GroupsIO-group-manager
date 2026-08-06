@@ -38,11 +38,19 @@ final class LevelMandatoryGroups {
 	/**
 	 * Renders the mandatory-groups textarea on the Edit Level screen.
 	 *
-	 * @param int $level_id The membership level being edited.
+	 * PMPro's `pmpro_membership_level_after_other_settings` action fires
+	 * with the level object itself (`stdClass`, per that hook's own
+	 * docblock in edit-level.php), not just its id - unlike
+	 * `pmpro_save_membership_level`, which does pass the int id
+	 * directly. $level->id is 0/empty for a not-yet-saved new level,
+	 * which get_for_level() already handles safely (an empty result).
+	 *
+	 * @param object $level The PMPro membership level object being edited.
 	 * @return void
 	 */
-	public static function render_field( int $level_id ): void {
-		$value = self::get_for_level( $level_id );
+	public static function render_field( object $level ): void {
+		$level_id = (int) ( $level->id ?? 0 );
+		$value    = self::get_for_level( $level_id );
 
 		wp_nonce_field( 'bits_groupsio_level_mandatory_groups', self::NONCE_NAME );
 
