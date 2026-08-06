@@ -46,6 +46,7 @@ final class Plugin {
 	private function __construct() {
 		Settings::register();
 		LevelMandatoryGroups::register();
+		MemberIndex::register();
 		GroupsIoManagementMenu::register();
 
 		// Remaining subsystems (Groups.io client, sync engine, magic link,

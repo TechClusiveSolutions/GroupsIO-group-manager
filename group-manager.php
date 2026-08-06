@@ -29,7 +29,12 @@ if ( file_exists( BITS_GROUPSIO_SYNC_DIR . 'vendor/autoload.php' ) ) {
 	require_once BITS_GROUPSIO_SYNC_DIR . 'vendor/autoload.php';
 }
 
-register_activation_hook( __FILE__, array( 'BITS\\GroupsIOSync\\AuditLog', 'activate' ) );
+if ( file_exists( BITS_GROUPSIO_SYNC_DIR . 'vendor/woocommerce/action-scheduler/action-scheduler.php' ) ) {
+	require_once BITS_GROUPSIO_SYNC_DIR . 'vendor/woocommerce/action-scheduler/action-scheduler.php';
+}
+
+register_activation_hook( __FILE__, array( 'BITS\GroupsIOSync\AuditLog', 'activate' ) );
+register_activation_hook( __FILE__, array( 'BITS\GroupsIOSync\MemberIndex', 'activate' ) );
 
 add_action(
 	'plugins_loaded',
