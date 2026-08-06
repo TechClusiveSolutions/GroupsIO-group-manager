@@ -12,6 +12,14 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
 	testDir: './tests/e2e/tests',
+	// Action Scheduler is now genuinely bootstrapped (as of #57), which
+	// triggers its own async queue-processing loopback request after
+	// POST-heavy admin actions - this adds real latency the previous
+	// 30s default sometimes didn't cover for POST-redirect-heavy flows
+	// (e.g. Subgroup Management's update/delete steps). More queued-job
+	// UI is coming (#59/#61/#62), so this is a durable increase, not a
+	// one-off workaround.
+	timeout: 60_000,
 	globalSetup: require.resolve( './tests/e2e/global-setup.ts' ),
 	fullyParallel: false, // Tests share one wp-env instance's mock state; run serially to avoid cross-test interference.
 	forbidOnly: !! process.env.CI,
