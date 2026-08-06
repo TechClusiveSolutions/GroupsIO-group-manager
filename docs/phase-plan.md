@@ -28,35 +28,46 @@ No code is written in this phase.
 * Unit-test the client against mocked HTTP responses only — no real network calls in the unit suite.
 * Exit criterion: the client is unit-tested for all documented response/error paths, and has been manually exercised at least once against the existing test Groups.io group(s), successfully adding to and removing from a subgroup (already demonstrated during Phase 0 verification — this exit criterion is satisfied by that trial plus the corresponding automated unit tests once written).
 
-### Phase 3 — Join/Change Sync (Add Path)
+### Phase 3 — GroupsIO Management Admin Pages
+
+Approved as a scope expansion on 2026-07-22 (see `CLAUDE.md`'s Scope Discipline section) and amending Phase 2: full admin-side subgroup lifecycle management (create/list/update/delete subgroups via the Groups.io API, independent of the automated member sync built in later phases), manual admin override of individual member subgroup assignment for intervention when automation misbehaves, and a dedicated "GroupsIO Management" admin area exposing this as three distinct pages. Full design in `app/docs/subgroup-crud-and-admin-pages-design.md`.
+
+* Amend Phase 2's client: add `GroupsIoApiClient::create_subgroup()`, `::remove_subgroup()`, and `::update_subgroup()`, plus a permanent CI-automated integration test exercising the full subgroup lifecycle (create → add → remove → delete) against the test group on every pull request.
+* Build the "GroupsIO Management" top-level admin menu scaffold, and relocate the Phase 1 settings screen to become the "Feature Controls" page under it (storage and rendering unchanged — only its menu location and heading move).
+* Build the Subgroup Management page: a List view (subgroup count, parent group address, every subgroup as a link to its Details view), a Create view, and a Details view (editable name/title/description, live member list, Update/Delete) — a low-density, screen-reader-friendly three-view layout, not a single combined page.
+* Build the User Assignment page and the sticky manual-override flag data model: member lookup, per-subgroup Add/Remove actions with follow-up read-back verification, and a "clear override" action. Suspend is investigated and explicitly deferred: Groups.io's native `banmember` endpoint was found broken server-side by live trial on 2026-07-25, so suspend's eventual implementation (a `remove_member()` plus sticky-override-flag fallback) is folded into Phase 6's drift-reconciliation work instead of built standalone here. This pass ships Add/Remove only.
+* Exit criterion: an admin can create, list, update, and delete Groups.io subgroups directly from the Subgroup Management page, with every write backed by live-verified read-back confirmation; can manually add or remove an individual member's subgroup access from the User Assignment page, with the action recorded as a sticky override and in the audit log; and the Feature Controls page (relocated Phase 1 settings) is reachable from the same "GroupsIO Management" menu — all verified with a screen reader pass, per `CLAUDE.md`'s Accessibility by Design section.
+
+### Phase 4 — Join/Change Sync (Add Path)
 
 * Implement the delta calculation: read a member's `list_subscriptions`, determine applicable mandatory groups (global + level-specific) for their current PMPro level, and compare against Groups.io's actual reported membership.
 * Bind to `pmpro_after_all_membership_level_changes` for join/renew/upgrade/downgrade, scheduling an Action Scheduler job (`bits_sync_groupsio_user`) that issues only the add calls needed to close the delta.
 * Record an audit log entry for every add attempted, with outcome.
 * Exit criterion: joining or upgrading to a level reliably results in the member being added to exactly the correct set of Groups.io subgroups (mandatory + their existing `list_subscriptions` selections), verified end-to-end against the test group, with correct audit entries.
 
-### Phase 4 — Removal on Membership End
+### Phase 5 — Removal on Membership End
 
 * Bind expiration/cancellation to the same delta-and-sync job, respecting the configured grace period before the removal actually executes.
 * Bind GDPR/CCPA account erasure to an immediate (no grace period) removal from every `(subgroup id, email)` pair in the member's `list_subscriptions`. Since `removemember` does not batch (PRD section 4.2), this means one `removemember` call per subgroup membership record, looped client-side, not a single call for the whole member.
 * Ensure a pending grace-period removal job is cancelled or safely no-ops if the member rejoins/renews before the grace period elapses.
 * Exit criterion: expiration and cancellation each correctly remove the member from all applicable subgroups after the grace period, a rejoin within the grace period correctly cancels the pending removal, and account erasure correctly and immediately removes the member from every subgroup they were registered under — all verified end-to-end against the test group.
 
-### Phase 5 — Drift Reconciliation
+### Phase 6 — Drift Reconciliation
 
-* Implement the nightly cron job running the same delta calculation across the full active membership base, correcting any mismatch between PMPro's recorded state and actual Groups.io membership.
+* Implement the nightly cron job running the same delta calculation across the full active membership base, correcting any mismatch between PMPro's recorded state and actual Groups.io membership. This job also respects any sticky manual-override flag set via Phase 3's User Assignment page, skipping rather than correcting any `(member, subgroup)` pair carrying one.
 * Implement the CAN-SPAM global opt-out handling: a member Groups.io reports as globally unsubscribed/bounced/marked spam is flagged and permanently skipped in future adds until manually cleared.
 * Implement the mass-action anomaly circuit breaker: track queued add/remove job volume within a rolling window, and once the configured threshold is exceeded, hold the excess jobs in a pending-approval state and send an immediate critical alert, rather than letting them execute automatically.
-* Exit criterion: a manually-induced mismatch (e.g., manually removing a test member directly in Groups.io) is detected and corrected within one nightly run, a simulated global-unsubscribe signal correctly and permanently excludes that member from future mandatory-group re-adds, and a simulated burst of jobs exceeding the configured threshold is correctly held pending approval with an admin alert sent, rather than executing.
+* Implement suspend as a real User Assignment page action (deferred from Phase 3): a `remove_member()` call plus the sticky-override flag set to `suspended`, since Groups.io's native `banmember` endpoint is broken server-side (confirmed by live trial, 2026-07-25).
+* Exit criterion: a manually-induced mismatch (e.g., manually removing a test member directly in Groups.io) is detected and corrected within one nightly run, a simulated global-unsubscribe signal correctly and permanently excludes that member from future mandatory-group re-adds, a simulated burst of jobs exceeding the configured threshold is correctly held pending approval with an admin alert sent, and an admin can suspend a member's subgroup access from the User Assignment page — all verified against the test group.
 
-### Phase 6 — Admin Operability
+### Phase 7 — Admin Operability
 
 * Build visibility into Action Scheduler queue health (pending/failed job counts) and the per-member audit view.
 * Build the kill switch's actual enforcement (halting all sync processing, including reconciliation, immediately when toggled).
-* Build the admin approval UI for jobs held by the mass-action anomaly circuit breaker (Phase 5), letting an admin review and approve or reject held jobs individually or as a batch.
+* Build the admin approval UI for jobs held by the mass-action anomaly circuit breaker (Phase 6), letting an admin review and approve or reject held jobs individually or as a batch.
 * Exit criterion: an admin can see current sync queue/audit health at a glance, toggling the kill switch verifiably halts all sync activity including in-progress reconciliation, and an admin can review and approve a batch of held mass-action jobs.
 
-### Phase 7 — Passwordless Profile Access (Magic Link)
+### Phase 8 — Passwordless Profile Access (Magic Link)
 
 * Build the self-service "email me a login link" request form, with rate limiting per email address and per requesting IP, and a generic response regardless of match.
 * Build token issuance: cryptographically random token, 15-minute expiration, single-use.
@@ -65,14 +76,14 @@ No code is written in this phase.
 * Build audit logging of link issuance, use, and expiry/invalidation events.
 * Exit criterion: a member can request a link, receive it, click it within 15 minutes, and land in an authenticated WordPress session exactly once. A second click of the same link, or a click after 15 minutes, is rejected. Rate limiting is verified against repeated requests.
 
-### Phase 8 — Accessibility & Security Hardening
+### Phase 9 — Accessibility & Security Hardening
 
-* Full screen reader pass (WCAG 2.1 AA) on every UI surface introduced in prior phases: admin settings screen, level meta box, magic link request form, any admin audit views.
+* Full screen reader pass (WCAG 2.1 AA) on every UI surface introduced in prior phases: admin settings screen, level meta box, the GroupsIO Management admin pages, magic link request form, any admin audit views.
 * Full verification of the security document's checklist against the shipped code: credential handling, magic link token security, GDPR erasure completeness, rate-limit/auth-failure alerting reliability.
 * Validation on the WordPress.com staging site against a mirrored copy of the real PMPro configuration, still targeting the test Groups.io group.
 * Exit criterion: the screen reader matrix pass and the security checklist both pass with no unresolved findings, verified on the staging site.
 
-### Phase 9 — v1.0 Release
+### Phase 10 — v1.0 Release
 
 * Merge `dev` to `main`, tag `v1.0.0`.
 * Publish the contribution policy and code of conduct (required, since `app` is a public repository).

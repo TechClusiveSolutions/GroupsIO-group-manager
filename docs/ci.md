@@ -54,4 +54,4 @@ After tagging and publishing a release, `main` has a commit (the release merge c
 ### 5. What CI Does Not Cover
 
 * Screen reader / accessibility verification is manual (per the Testing Standard document, section 6) and is not a CI job.
-* Deployment to the WordPress.com staging site or the live BITS site is not automated by CI in v1 — it remains a manual step, consistent with Phase 8 and Phase 9's exit criteria.
+* Deployment to the WordPress.com staging site or the live BITS site is not automated by CI in v1 — it remains a manual step, consistent with Phase 9 and Phase 10's exit criteria.

@@ -79,7 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-field accessibility descriptions (`aria-describedby`), native label
   association, and autofocus on the first field of the settings screen.
 - A Reset button on the settings screen, and a disabled "Run Dry-Run Now"
-  stub ahead of the Phase 5 reconciliation engine.
+  stub ahead of the Phase 6 reconciliation engine.
 
 ### Fixed
 

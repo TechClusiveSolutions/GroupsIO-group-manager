@@ -10,7 +10,7 @@ This document specifies how testing works for this project: framework, environme
 
 * **Unit and integration test framework**: PHPUnit, run against the WordPress core PHPUnit test suite bootstrap (via `wp-env`'s built-in test environment, or the standard `install-wp-tests.sh` script), so tests can exercise real WordPress functions, hooks, and a real (throwaway) test database rather than hand-mocking WordPress core behavior.
 * **Local development environment**: `wp-env` (the official WordPress Docker-based tool) for day-to-day iteration. This does not carry a real PMPro license or WordPress.com-specific behavior, so it is for fast dev-loop iteration only.
-* **Pre-release validation environment**: the WordPress.com Business Plan staging site, a full mirror of the live BITS site including its real PMPro configuration. This is where Phase 8's hardening pass happens; it is not part of the automated CI test run.
+* **Pre-release validation environment**: the WordPress.com Business Plan staging site, a full mirror of the live BITS site including its real PMPro configuration. This is where Phase 9's hardening pass happens; it is not part of the automated CI test run.
 
 ### 3. Unit Tests
 
@@ -41,8 +41,8 @@ This document specifies how testing works for this project: framework, environme
 
 ### 6. Accessibility Testing
 
-* Automated tests do not verify WCAG compliance; that is a manual screen reader verification step (per `CLAUDE.md`'s Accessibility by Design section), performed by the primary contributor for day-to-day changes and as a fuller screen reader matrix pass gating Phase 8 and any merge to `dev` that introduces or changes a UI surface.
+* Automated tests do not verify WCAG compliance; that is a manual screen reader verification step (per `CLAUDE.md`'s Accessibility by Design section), performed by the primary contributor for day-to-day changes and as a fuller screen reader matrix pass gating Phase 9 and any merge to `dev` that introduces or changes a UI surface.
 
 ### 7. What Is Explicitly Not Automated Yet
 
-* Load/scale testing (e.g., simulating BITS's full membership base hitting reconciliation simultaneously) is not part of the automated suite for v1; Phase 5's exit criterion relies on a smaller, manually-verified test-group scenario instead. If BITS's membership scale later warrants it, a dedicated scale-testing pass can be added as future scope.
+* Load/scale testing (e.g., simulating BITS's full membership base hitting reconciliation simultaneously) is not part of the automated suite for v1; Phase 6's exit criterion relies on a smaller, manually-verified test-group scenario instead. If BITS's membership scale later warrants it, a dedicated scale-testing pass can be added as future scope.
