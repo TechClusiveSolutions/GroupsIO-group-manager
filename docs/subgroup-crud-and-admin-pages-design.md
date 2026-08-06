@@ -14,6 +14,17 @@ code is written, per `CLAUDE.md`'s Order of Operations. See
 `app/docs/phase-plan.md` Phase 2's added bullets and the new Phase 3 for
 the approved scope this document implements against.
 
+**Amended 2026-08-06**: the User Assignment page (section 12) is
+substantially expanded from its original single-page Add/Remove/Clear-override
+concept into a List/Details/Add-Groups view set with pagination, search, bulk
+actions, and asynchronous queued execution — the original reconciliation
+concept (PMPro-expected-set comparison, sticky-override flag) still applies
+and is not replaced, only enhanced. This amendment also introduces a local
+membership index table and sync job (section 6, expanded), real audit log
+recording (section 7, new), and the first implementation of issue #50's
+queued-execution-with-retry design (section 8, new) — none of which existed
+in any form before this amendment.
+
 ### 2. Scope
 
 In scope for this pass:
@@ -21,7 +32,7 @@ In scope for this pass:
 * `GroupsIoApiClient::create_subgroup()` and `::remove_subgroup()`.
 * Live verification of the create/remove-subgroup HTTP contract against the
   test group — **resolved** (see section 3 below), along with the later
-  update/rename contract (section 9).
+  update/rename contract (section 11).
 * Investigation of whether Groups.io exposes a real per-member
   moderation/suspend state on a subgroup, distinct from full removal —
   **resolved** (see section 4): native `banmember` is broken server-side;
@@ -35,6 +46,13 @@ In scope for this pass:
 * The sticky manual-override flag data model that Phase 6's drift
   reconciliation will later have to respect (the flag itself is built now;
   reconciliation honoring it is Phase 6's responsibility, not this pass's).
+* **Added 2026-08-06**: a local membership index table mirroring actual
+  Groups.io membership and the PMPro-expected-set comparison per
+  `(member, subgroup)` pair (section 6); real `AuditLog` recording (section
+  7); a queued, retried execution engine for User Assignment's add/remove
+  actions with distinct per-outcome admin notifications, implementing issue
+  #50 (section 8); and User Assignment's expanded List/Details/Add-Groups
+  view set with pagination, search, and bulk actions (section 12).
 
 Explicitly not in scope for this pass (later phases):
 
@@ -49,13 +67,18 @@ Explicitly not in scope for this pass (later phases):
   critical feature and its *implementation* is pushed to Phase 6, where it
   is folded in alongside the drift-reconciliation logic that already has to
   understand the sticky-override flag. This pass's User Assignment page
-  ships with Add/Remove only (section 10).
-* Any Action Scheduler job wiring for subgroup CRUD — these are direct,
-  synchronous admin actions initiated from a page click, not background
-  jobs, matching how PRD-scoped admin actions work elsewhere in this
-  plugin.
+  ships with Add/Remove only (section 12).
+* Any Action Scheduler job wiring for subgroup CRUD — Subgroup Management's
+  create/update/delete actions remain direct, synchronous admin actions
+  initiated from a page click, not background jobs. (User Assignment's
+  add/remove actions are the exception — see section 8 — since queuing was
+  explicitly requested for that page, not for Subgroup Management.)
+* A dedicated audit log *viewer* UI — this pass builds `AuditLog::record()`
+  (section 7) so entries actually get written, but reading/displaying them
+  is the "per-member audit view" already scoped to Phase 7 (Admin
+  Operability) in `phase-plan.md`.
 
-### 3. Client Additions: `create_subgroup()` / `remove_subgroup()` — Resolved (see also section 9 for the later `update_subgroup()` / rename resolution)
+### 3. Client Additions: `create_subgroup()` / `remove_subgroup()` — Resolved (see also section 11 for the later `update_subgroup()` / rename resolution)
 
 Confirmed by live trial against the test group, per this project's
 established practice (`CLAUDE.md`, PRD section 9):
@@ -164,23 +187,124 @@ established in the original Phase 2 design, a follow-up `get_members()` /
 to the next step. Test subgroup names are timestamped/randomized to avoid
 collisions with any leftover state from a prior partial run.
 
-### 6. Sticky Manual-Override Flag — Data Model
+### 6. Local Membership Index & Sync Job — Includes the Sticky Manual-Override Flag
 
-* Storage: a new column or serialized field on the existing
-  `bits_groupsio_audit` table (exact shape decided at implementation time,
-  consistent with that table's existing structure) recording, per
-  `(member, subgroup)` pair: that the current state was set by manual admin
-  action, which admin, when, and the action type (`added` / `removed` /
-  `suspended`).
+**Expanded 2026-08-06** from the original "Sticky Manual-Override Flag —
+Data Model" section. Groups.io's API is subgroup-scoped (`get_subgroups()`,
+`get_members()` for one subgroup at a time) — it has no member-centric
+endpoint that can serve a single paginated, searchable "every member across
+the parent group and all subgroups, with per-member group counts" view, which
+section 12's redesigned User Assignment pages need. A local index table is
+the practical way to serve that without live-aggregating across every
+subgroup on every page load or search.
+
+* **New table**, e.g. `bits_groupsio_member_index`: one row per
+  `(member, subgroup)` pair, columns approximately `id`, `user_id`
+  (nullable — not every Groups.io member is necessarily a matched WP user),
+  `email`, `display_name`, `subgroup_id`, `subgroup_slug`, `subgroup_title`,
+  `pmpro_expected` (bool — whether this pairing is expected per the
+  member's current PMPro level, computed from `LevelMandatoryGroups` +
+  `Settings::global_mandatory_groups`), `override_type` (nullable —
+  `added` / `removed` / `suspended`, the sticky-override flag itself, moved
+  here from the original plan to store it on `bits_groupsio_audit` — this
+  table is what the UI actually queries, so storing the flag alongside the
+  membership row it applies to avoids a join), `override_by` (admin user
+  id), `override_at` (datetime), `synced_at` (datetime, last confirmed
+  against live Groups.io).
+* **Sync job**: calls `get_subgroups()` then `get_members()` per subgroup,
+  upserting rows to reflect actual current membership, and recomputing
+  `pmpro_expected` per row. This is the first place the PMPro-expected-set
+  computation (global + level-mandatory groups for a member's current
+  level) actually gets built in this codebase — previously only the
+  settings *storage* for those lists existed, not the comparison logic
+  itself. Exact scheduling cadence (e.g. hourly via Action Scheduler
+  recurring action) decided at implementation time.
+* The parent group itself is represented as one of the "subgroup" rows for
+  indexing purposes (every member is, in effect, always a member of the
+  top-level parent group) — this is what gives the List page's "including
+  parent" group count its `+1`.
 * Drift reconciliation (Phase 6, not built in this pass) is expected to
-  check this flag and skip any `(member, subgroup)` pair carrying it,
-  rather than correcting it back to the PMPro-derived expected state.
+  check `override_type` and skip any `(member, subgroup)` pair carrying it,
+  rather than correcting it back to the PMPro-expected state.
 * The flag is cleared automatically when the member's PMPro level changes
-  (a fresh join/upgrade/downgrade supersedes a stale manual override), or
-  explicitly by an admin action on the User Assignment page ("clear
-  override" / "resume automatic management" for that member).
+  (a fresh join/upgrade/downgrade supersedes a stale manual override, and
+  also triggers a re-sync of that member's `pmpro_expected` values), or
+  explicitly by an admin action on the User Assignment Details page
+  ("clear override" per row).
+* Only this table and the actual Groups.io add/remove/read calls (section
+  8) touch Groups.io directly for User Assignment purposes — the List,
+  Details, and Add Groups pages (section 12) all read from this local
+  table, never live-aggregating across subgroups on a page load.
 
-### 7. Admin Pages: Menu Structure
+### 7. Audit Log Recording — `AuditLog::record()`
+
+**New 2026-08-06.** `includes/AuditLog.php` currently only owns the
+`bits_groupsio_audit` table's schema and creation (per its own docblock:
+"Recording/reading audit entries is added in later phases alongside the
+sync engine that produces them") — no code anywhere actually writes a row
+to it yet. This section is that "later phase," scoped specifically to what
+section 8's queued execution engine needs.
+
+* `AuditLog::record( string $action, string $outcome, string $target_email, string $subgroup_id, int $user_id, string $api_response_detail = '' ): void`
+  (exact signature decided at implementation time, matching the table's
+  existing columns: `action`, `outcome`, `target_email`, `subgroup_id`,
+  `user_id`, `api_response_detail`, `created_at`) — a straightforward
+  `$wpdb->insert()` wrapper, consistent with this project's existing
+  direct-`$wpdb`-write convention elsewhere (e.g. `LevelMandatoryGroups`,
+  `Settings`).
+* Called by section 8's queued job for every add/remove attempt, on both
+  success and failure outcomes — not just failures.
+* No audit log *viewer* UI in this pass (see section 2's out-of-scope
+  list) — this section only makes recording real; reading/displaying
+  entries is Phase 7's "per-member audit view."
+
+### 8. Queued Execution Engine & Admin Notifications
+
+**New 2026-08-06.** The first real implementation of issue #50's design,
+scoped to User Assignment's add/remove actions (section 12). Subgroup
+Management's create/update/delete actions remain synchronous (section 2)
+— this queuing is specific to User Assignment, where bulk actions across
+potentially many subgroups make a fully synchronous request impractical.
+
+* **Instant confirmation**: submitting an Add, Remove, "Remove Selected,"
+  or "Add Selected" action returns immediately with a "queued" notice —
+  no synchronous Groups.io API call happens inside that request. A bulk
+  action queues one job per `(member, subgroup)` pair, not one job for the
+  whole batch, since `direct_add()`/`remove_member()` are themselves
+  single-subgroup/single-target operations.
+* **Background execution**: each queued job is an Action Scheduler action
+  that calls the actual `direct_add()`/`remove_member()`, with up to 3
+  retries on failure (exact retry/backoff mechanism — Action Scheduler's
+  own built-in retry support vs. manually rescheduling — decided at
+  implementation time).
+* **On success** (first attempt or after a retry): the job updates the
+  local member-index row (section 6) to reflect the new actual state,
+  writes the sticky-override flag (`override_type`/`override_by`/
+  `override_at`), calls `AuditLog::record()` (section 7) with a success
+  outcome, and raises a success notification (below).
+* **On exhaustion** (all 3 retries failed): the job calls
+  `AuditLog::record()` with a failure outcome and raises a failure
+  notification (below). The local index row is left unchanged (still
+  reflecting the last-known actual state, not the attempted-but-failed
+  change).
+* **Admin notifications**: WordPress has no built-in persistent
+  notification center — a page-load-only `admin_notices` hook can't
+  represent an outcome that becomes known *after* the request that
+  triggered it, since the job runs asynchronously. This section adds a
+  small persisted-notification mechanism (a new table or option-backed
+  queue — exact storage decided at implementation time) that:
+  * Records one notification per job outcome — both success and failure,
+    per explicit direction, not just failure.
+  * Renders each pending notification as its own distinct, individually
+    dismissible admin notice on the next admin page load — multiple
+    notifications display as multiple separate notices, never merged or
+    collapsed into one, even when several jobs from the same bulk action
+    complete around the same time.
+  * A notification is cleared once the admin dismisses it (standard
+    WordPress dismissible-notice pattern), not automatically on next
+    page load.
+
+### 9. Admin Pages: Menu Structure
 
 * A single new top-level WordPress admin menu item, "GroupsIO Management,"
   registered via `add_menu_page()`, with three submenu pages registered via
@@ -190,7 +314,7 @@ collisions with any leftover state from a prior partial run.
   3. Subgroup Management.
 * Each page is its own class under `includes/Admin/` (new subdirectory,
   since this is the first admin-page-per-class split in the codebase;
-  existing `Settings.php` stays where it is per section 8 below), following
+  existing `Settings.php` stays where it is per section 10 below), following
   the single-responsibility-per-class rule in `CLAUDE.md`.
 * All three pages follow the accessible-admin-UI patterns already
   established in `Settings.php` and documented in
@@ -198,7 +322,7 @@ collisions with any leftover state from a prior partial run.
   `aria-describedby` field descriptions, autofocus on the first field only,
   correct context-specific escaping, and explained-disabled-controls.
 
-### 8. Page: Feature Controls
+### 10. Page: Feature Controls
 
 * Renames and relocates the existing Phase 1 `Settings` admin page
   (global mandatory groups, grace period, log retention policy, kill
@@ -208,7 +332,7 @@ collisions with any leftover state from a prior partial run.
   title/labels change to reflect the new location.
 * No new functionality in this pass beyond the relocation itself.
 
-### 9. Page: Subgroup Management
+### 11. Page: Subgroup Management
 
 **Redesigned 2026-08-05**, per the primary contributor's explicit direction to prioritize a screen-reader-friendly, low-density layout over a single all-in-one page. Three distinct views instead of one combined list/create/rename/delete page:
 
@@ -228,42 +352,84 @@ collisions with any leftover state from a prior partial run.
   * "Delete" button: reveals an inline confirmation (warning text + "Yes, delete"/"Cancel") on the same page - no separate confirmation page/step, per the same low-density-screen goal. Confirmed delete calls `remove_subgroup()`, read-back verified, invalidates the `SubgroupIdCache` entry, and redirects to the List view with a success notice.
   * All Groups.io API errors surface in plain language, consistent with the prior design.
 
-### 10. Page: User Assignment
+### 12. Page: User Assignment
 
-* Member lookup (by email or WordPress user search) showing that member's
-  current subgroup memberships (`get_members()` cross-referenced against
-  the member's known email) and their PMPro-derived expected set, so an
-  admin can see at a glance where the two disagree.
-* Per-subgroup row: Add / Remove action buttons. (Suspend is deferred to
-  Phase 6 per section 4 — not built in this pass.)
-  * Add → `direct_add()` for that one subgroup, sets the sticky-override
-    flag (section 6) as `added`.
-  * Remove → `remove_member()`, flag set as `removed`.
-* "Clear override" per row, removing the sticky flag and letting the next
-  reconciliation run (Phase 6) resync that pair to the PMPro-derived state
-  normally.
-* Every action writes an audit log entry (existing `AuditLog` class),
-  consistent with how automated sync actions are already logged.
+**Redesigned 2026-08-06**, expanding the original single-page Add/Remove/
+Clear-override concept into three distinct low-density views, mirroring the
+List/Details pattern already established for Subgroup Management (section
+11), plus bulk actions and asynchronous queued execution (section 8). The
+original reconciliation concept — the PMPro-expected-set comparison and the
+sticky-override flag — still applies; this redesign changes how the page is
+organized and how actions execute, not what the page is fundamentally for.
 
-### 11. Testing Approach
+* **List view** (default, `?page=bits-groupsio-user-assignment`):
+  * A paginated table drawn from the local member index (section 6): each
+    row shows the member's Name, Email, and total group count (parent +
+    subgroups).
+  * A search box + button: matches against member name, email, or subgroup
+    name/slug — a query matching a subgroup filters the list to members
+    belonging to that subgroup.
+  * Each member's name links to their Details view.
+* **Details view** (`?page=bits-groupsio-user-assignment&view=details&member=...`):
+  * A paginated list of the member's current subscribed groups (parent +
+    subgroups, per the local index), each row displaying the group as
+    "Title (namespace)" (e.g. "Sustaining Members
+    (`perception-is-all+sustaining-members`)"), a PMPro-expected indicator
+    (flags a disagreement between actual and PMPro-expected membership —
+    never conveyed by color alone), the current sticky-override state if
+    one is set, and a checkbox.
+  * A search box + button filtering this member's own group list by
+    subgroup name or title.
+  * "Remove Selected" button: queues a remove job (section 8) for each
+    checked group.
+  * "Clear override" control per row carrying an override flag, releasing
+    it back to normal automated management.
+  * A link to the Add Groups view.
+* **Add Groups view** (`?page=bits-groupsio-user-assignment&view=add-groups&member=...`):
+  * A paginated checkbox list of every group (parent + subgroups) the
+    member is *not* currently in, per the local index, each displayed as
+    "Title (namespace)" — same format as the Details view.
+  * A search box + button, same subgroup name/title matching as the
+    Details view.
+  * "Add Selected" button: queues an add job (section 8) for each checked
+    group.
+  * Redirects to the Details view on submission — the actual adds happen
+    asynchronously (section 8); the page confirms the jobs were queued,
+    not that they've completed.
+* Suspend remains deferred to Phase 6 (section 4) — not built in this pass.
+
+### 13. Testing Approach
 
 * `GroupsIoApiClient::create_subgroup()`/`remove_subgroup()`: unit-tested
   against mocked HTTP responses (success, duplicate/conflict error,
   not-found error), same `pre_http_request` mocking convention as the rest
   of the client.
-* Sticky-override flag read/write logic: `WP_UnitTestCase`-based unit
-  tests against the real WordPress test database, per existing convention.
-* The three admin page classes: unit-tested for their data-handling logic
-  (form processing, nonce verification, capability checks) using
-  `WP_UnitTestCase`; a manual screen-reader pass by the primary contributor
-  is required before any of the three pages is considered done, per
+* Local member-index sync job (section 6): unit-tested against mocked
+  `get_subgroups()`/`get_members()` responses, asserting correct upsert
+  behavior and correct `pmpro_expected` computation for a range of
+  level/global-mandatory-group combinations.
+* `AuditLog::record()` (section 7): `WP_UnitTestCase`-based unit tests
+  asserting a row is written with the expected columns, against the real
+  WordPress test database.
+* Queued execution engine and admin notifications (section 8): unit-tested
+  for job scheduling/dispatch, retry-count behavior, and the
+  distinct-per-outcome notification write path — Groups.io calls
+  themselves mocked, same convention as the rest of the client's tests.
+* Sticky-override flag read/write logic (now part of the member-index
+  table, section 6): `WP_UnitTestCase`-based unit tests against the real
+  WordPress test database, per existing convention.
+* The admin page classes (all four, across Feature Controls, Subgroup
+  Management, and User Assignment's three views): unit-tested for their
+  data-handling logic (form processing, nonce verification, capability
+  checks) using `WP_UnitTestCase`; a manual screen-reader pass by the
+  primary contributor is required before any page is considered done, per
   `CLAUDE.md`'s Accessibility by Design section — this is not satisfied by
   automated tests alone.
 * The permanent integration test (section 5) runs automatically in CI on
   every pull request, gated on the `groupsio-test-group` environment, per
   `testing-standard.md` section 4 and `ci.md` section 3.2.
 
-### 12. Exit Criteria (per `phase-plan.md`)
+### 14. Exit Criteria (per `phase-plan.md`)
 
 Reproduced from `phase-plan.md` for traceability — see that document as
 the authoritative source if the two ever diverge:
@@ -272,12 +438,18 @@ the authoritative source if the two ever diverge:
   unit-tested and live-verified; the suspend-state investigation is
   resolved one way or the other; the permanent integration test passes
   automatically in CI against the test group.
-* **Phase 3**: an admin can reach all three GroupsIO Management pages; can
-  add/remove a test member's subgroup assignment from User Assignment with
-  the sticky-override flag verifiably respected by a subsequent
-  reconciliation run (once Phase 6 exists to test that end-to-end — until
-  then, verify the flag is at least correctly written and readable); can
-  save/retrieve operational settings from Feature Controls; and can
-  create, list, update, and delete a subgroup and view its membership from
-  Subgroup Management — all verified against the test group. (Suspend is
-  deferred to Phase 6 — see section 4.)
+* **Phase 3**: an admin can reach all three GroupsIO Management pages; the
+  local member index (section 6) is populated and queryable, with
+  `pmpro_expected` correctly computed; `AuditLog::record()` (section 7)
+  writes a real entry for every add/remove attempt; an admin can add,
+  remove, and bulk-remove/bulk-add a test member's subgroup assignments
+  from User Assignment's List/Details/Add-Groups views, each action
+  completing asynchronously via the queued execution engine (section 8)
+  with a distinct success or failure notification and the sticky-override
+  flag verifiably respected by a subsequent reconciliation run (once
+  Phase 6 exists to test that end-to-end — until then, verify the flag is
+  at least correctly written and readable); can save/retrieve operational
+  settings from Feature Controls; and can create, list, update, and delete
+  a subgroup and view its membership from Subgroup Management — all
+  verified against the test group. (Suspend is deferred to Phase 6 — see
+  section 4.)
