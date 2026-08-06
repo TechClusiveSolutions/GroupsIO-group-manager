@@ -17,7 +17,7 @@ This document specifies, per issue type, the conditions that must be true before
 * Formal acceptance criteria (Given/When/Then), including at least one accessibility-focused scenario, are written and confirmed before implementation starts, per `CLAUDE.md`.
 * Every acceptance criterion is demonstrably satisfied.
 * A corresponding unit test and integration test exist for the feature, per the Testing Standard document.
-* If the feature touches a UI surface listed in `docs/ux-accessibility.md` section 3, it has passed the default local screen reader verification (the fuller matrix pass is reserved for the Phase 8 gate, not every individual feature issue).
+* If the feature touches a UI surface listed in `docs/ux-accessibility.md` section 3, it has passed the default local screen reader verification (the fuller matrix pass is reserved for the Phase 9 gate, not every individual feature issue).
 * If the feature touches stored content, credentials, authentication, or the Groups.io API, it has been checked against `docs/security.md`'s relevant section(s), per `CLAUDE.md`'s Security Gate.
 * Any documentation (`PRD.md`, `phase-plan.md`, `security.md`, etc.) affected by the feature is updated to match what was actually built, if it diverged from what was originally documented.
 
@@ -42,4 +42,4 @@ This document specifies, per issue type, the conditions that must be true before
 
 ### 7. Phase-Level "Definition of Done" vs. Issue-Level
 
-* An individual issue being "done" per this document is necessary but not always sufficient for a phase to be considered complete — each phase in `phase-plan.md` carries its own exit criterion, which may require multiple issues to be done collectively (e.g., Phase 8's exit criterion requires the fuller screen reader matrix pass and the full security checklist verification, neither of which is scoped to a single issue).
+* An individual issue being "done" per this document is necessary but not always sufficient for a phase to be considered complete — each phase in `phase-plan.md` carries its own exit criterion, which may require multiple issues to be done collectively (e.g., Phase 9's exit criterion requires the fuller screen reader matrix pass and the full security checklist verification, neither of which is scoped to a single issue).

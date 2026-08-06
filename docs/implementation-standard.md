@@ -34,7 +34,7 @@ Resolved (deferred from the Security document, section 6): the test-group Groups
 
 ### 7. Reconciliation Dry-Run Mode
 
-Resolved (deferred from the Security document, section 4): the nightly reconciliation job supports a dry-run mode (computing and logging the delta it would act on, without executing any add/remove calls), controlled by an admin-configurable setting. Dry-run mode is the default immediately after Phase 5 is first deployed to the live site, and is switched to live execution only after an admin reviews at least one dry-run report and confirms it looks correct — this is a deployment/rollout step to be reflected in the Definition of Done for Phase 5, not an automated code behavior.
+Resolved (deferred from the Security document, section 4): the nightly reconciliation job supports a dry-run mode (computing and logging the delta it would act on, without executing any add/remove calls), controlled by an admin-configurable setting. Dry-run mode is the default immediately after Phase 6 is first deployed to the live site, and is switched to live execution only after an admin reviews at least one dry-run report and confirms it looks correct — this is a deployment/rollout step to be reflected in the Definition of Done for Phase 6, not an automated code behavior.
 
 ### 8. Review Expectations
 
