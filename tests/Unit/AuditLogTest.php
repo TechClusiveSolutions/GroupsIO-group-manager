@@ -48,4 +48,69 @@ final class AuditLogTest extends WP_UnitTestCase {
 
 		$this->assertSame( '', $wpdb->last_error );
 	}
+
+	public function test_record_inserts_a_row_with_all_fields(): void {
+		global $wpdb;
+
+		AuditLog::create_table();
+
+		AuditLog::record( 'add', 'success', 'member@example.com', 'subgroup-1', 7, 'HTTP 200 OK' );
+
+		$row = $wpdb->get_row(
+			'SELECT * FROM ' . AuditLog::table_name() . ' ORDER BY id DESC LIMIT 1',
+			ARRAY_A
+		);
+
+		$this->assertNotNull( $row );
+		$this->assertSame( 'add', $row['action'] );
+		$this->assertSame( 'success', $row['outcome'] );
+		$this->assertSame( 'member@example.com', $row['target_email'] );
+		$this->assertSame( 'subgroup-1', $row['subgroup_id'] );
+		$this->assertSame( '7', $row['user_id'] );
+		$this->assertSame( 'HTTP 200 OK', $row['api_response_detail'] );
+		$this->assertNotEmpty( $row['created_at'] );
+	}
+
+	public function test_record_defaults_api_response_detail_to_empty_string(): void {
+		global $wpdb;
+
+		AuditLog::create_table();
+
+		AuditLog::record( 'remove', 'failure', 'member@example.com', 'subgroup-2', 3 );
+
+		$row = $wpdb->get_row(
+			'SELECT * FROM ' . AuditLog::table_name() . ' ORDER BY id DESC LIMIT 1',
+			ARRAY_A
+		);
+
+		$this->assertSame( '', $row['api_response_detail'] );
+	}
+
+	public function test_record_supports_zero_user_id_for_system_initiated_actions(): void {
+		global $wpdb;
+
+		AuditLog::create_table();
+
+		AuditLog::record( 'remove', 'success', 'member@example.com', 'subgroup-3', 0 );
+
+		$row = $wpdb->get_row(
+			'SELECT * FROM ' . AuditLog::table_name() . ' ORDER BY id DESC LIMIT 1',
+			ARRAY_A
+		);
+
+		$this->assertSame( '0', $row['user_id'] );
+	}
+
+	public function test_record_records_multiple_entries_independently(): void {
+		global $wpdb;
+
+		AuditLog::create_table();
+
+		AuditLog::record( 'add', 'success', 'a@example.com', 'subgroup-1', 1 );
+		AuditLog::record( 'add', 'failure', 'b@example.com', 'subgroup-1', 1, 'HTTP 500' );
+
+		$count = $wpdb->get_var( 'SELECT COUNT(*) FROM ' . AuditLog::table_name() );
+
+		$this->assertSame( '2', $count );
+	}
 }
