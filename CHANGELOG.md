@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `MemberIndex` (`includes/MemberIndex.php`): a new local `bits_groupsio_member_index` table mirroring actual Groups.io membership per (member, subgroup) pair, plus a sync job (`get_subgroups()` + `get_members()` per subgroup) that populates it and computes each row's PMPro-expected flag from `LevelMandatoryGroups` + `Settings::global_mandatory_groups` - the first place this expected-set computation actually exists in the codebase, previously only the settings *storage* for those lists existed. Every member is also indexed against the parent group itself (always expected). The sticky manual-override flag (`override_type`/`override_by`/`override_at`) now lives on this table, superseding the earlier plan to store it on `bits_groupsio_audit`, and is cleared automatically on `pmpro_after_all_membership_level_changes`. Registered as a recurring hourly Action Scheduler action. Per `docs/subgroup-crud-and-admin-pages-design.md` section 6.
+- `AuditLog::record()`: implements the write path for the `bits_groupsio_audit` table (schema-only until now) - a straightforward `$wpdb->insert()` wrapper matching the project's existing direct-write convention (`LevelMandatoryGroups`, `Settings`). Called by the future queued execution engine (#59) for every add/remove attempt, on both success and failure outcomes. Per `docs/subgroup-crud-and-admin-pages-design.md` section 7.
 - Playwright's default test timeout raised from 30s to 60s (`playwright.config.ts`) - Action Scheduler being genuinely active for the first time (above) triggers its own async queue-processing loopback request after POST-heavy admin actions, adding real latency that the previous default sometimes didn't cover for POST-redirect-heavy flows like Subgroup Management's update/delete steps. More queued-job UI is coming, so this is a durable increase, not a one-off workaround.
 
 - New "GroupsIO Management" top-level admin menu (`includes/Admin/`), with three submenu pages: User Assignment (default landing page, placeholder pending #35), Feature Controls (the relocated Phase 1 Settings page - same underlying storage and rendering, only its menu location and title changed), and Subgroup Management (see below).
@@ -77,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Plugin scaffold: bootstrap, audit table (`bits_groupsio_audit`), and CI.
+- `AuditLog::record()`: implements the write path for the `bits_groupsio_audit` table (schema-only until now) - a straightforward `$wpdb->insert()` wrapper matching the project's existing direct-write convention (`LevelMandatoryGroups`, `Settings`). Called by the future queued execution engine (#59) for every add/remove attempt, on both success and failure outcomes. Per `docs/subgroup-crud-and-admin-pages-design.md` section 7.
 - Admin settings screen (Settings > BITS Groups.io Sync) for the database-backed
   operational settings: global mandatory groups, grace period, log retention
   policy, kill switch, mass-action anomaly threshold, magic link rate limits,
