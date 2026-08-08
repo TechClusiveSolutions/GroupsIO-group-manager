@@ -1,6 +1,6 @@
 <?php
 /**
- * Audit log table schema and creation.
+ * Audit log table schema, creation, and recording.
  *
  * @package BITS\GroupsIOSync
  */
@@ -12,9 +12,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Owns the bits_groupsio_audit table: schema and creation only in this
- * phase. Recording/reading audit entries is added in later phases
- * alongside the sync engine that produces them.
+ * Owns the bits_groupsio_audit table: schema, creation, and recording.
+ * Reading/displaying entries is a later phase's per-member audit view.
  */
 final class AuditLog {
 
@@ -68,5 +67,43 @@ final class AuditLog {
 		) $charset_collate;";
 
 		dbDelta( $sql );
+	}
+
+	/**
+	 * Records one audit entry for an add/remove attempt, on either a
+	 * success or failure outcome.
+	 *
+	 * @param string $action              e.g. 'add', 'remove'.
+	 * @param string $outcome             e.g. 'success', 'failure'.
+	 * @param string $target_email        Email of the member acted on.
+	 * @param string $subgroup_id         Groups.io subgroup identifier acted on.
+	 * @param int    $user_id             WP user id of the admin/process that initiated the action (0 if none).
+	 * @param string $api_response_detail Raw Groups.io API response detail, if any.
+	 * @return void
+	 */
+	public static function record(
+		string $action,
+		string $outcome,
+		string $target_email,
+		string $subgroup_id,
+		int $user_id,
+		string $api_response_detail = ''
+	): void {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- this table isn't object-cached, matching this file's own uncached direct-write convention.
+		$wpdb->insert(
+			self::table_name(),
+			array(
+				'created_at'          => current_time( 'mysql', true ),
+				'user_id'             => $user_id,
+				'target_email'        => $target_email,
+				'subgroup_id'         => $subgroup_id,
+				'action'              => $action,
+				'outcome'             => $outcome,
+				'api_response_detail' => $api_response_detail,
+			),
+			array( '%s', '%d', '%s', '%s', '%s', '%s', '%s' )
+		);
 	}
 }
