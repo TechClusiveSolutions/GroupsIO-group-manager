@@ -83,7 +83,11 @@ final class UserAssignmentPage {
 	/**
 	 * Renders the search box + button. A native GET <form> - submitting
 	 * it reloads this same page with `s` (and no `paged`, so a new
-	 * search always starts back on page 1) in the query string.
+	 * search always starts back on page 1) in the query string. The
+	 * search field carries autofocus - the only control on this page -
+	 * so a screen reader user's focus lands on a real control on page
+	 * load rather than the body, matching the autofocus-on-first-field
+	 * convention already established in Settings.php/SubgroupManagementPage.
 	 *
 	 * @param string $search Current search term, if any, for re-display.
 	 * @return void
@@ -98,6 +102,7 @@ final class UserAssignmentPage {
 				id="bits-groupsio-user-search"
 				name="s"
 				value="<?php echo esc_attr( $search ); ?>"
+				autofocus
 			/>
 			<button type="submit" class="button"><?php esc_html_e( 'Search', 'bits-groupsio-sync' ); ?></button>
 		</form>

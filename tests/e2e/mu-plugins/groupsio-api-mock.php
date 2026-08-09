@@ -52,8 +52,8 @@ function bits_e2e_mock_get_state(): array {
 					'desc'       => 'A seeded fixture subgroup for E2E tests.',
 					'subs_count' => 2,
 					'members'    => array(
-						array( 'id' => 300001, 'email' => 'fixture-member-1@example.test' ),
-						array( 'id' => 300002, 'email' => 'fixture-member-2@example.test' ),
+						array( 'id' => 300001, 'email' => 'fixture-member-1@example.test', 'full_name' => 'Fixture Member One' ),
+						array( 'id' => 300002, 'email' => 'fixture-member-2@example.test', 'full_name' => 'Fixture Member Two' ),
 					),
 				),
 			),
