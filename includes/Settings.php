@@ -85,6 +85,16 @@ final class Settings {
 	 */
 	public static function register(): void {
 		add_action( 'admin_init', array( self::class, 'register_setting' ) );
+
+		// update_option_{option} only fires when an existing option row
+		// is genuinely changed - it does not fire for the very first
+		// save on a fresh install, where the row doesn't exist yet and
+		// WordPress takes the add_option() path instead (add_option_
+		// {option}, with no "old value" argument at all). Both are
+		// hooked so every real save is audited, not just changes after
+		// the first one.
+		add_action( 'update_option_' . self::OPTION_NAME, array( self::class, 'log_change' ), 10, 2 );
+		add_action( 'add_option_' . self::OPTION_NAME, array( self::class, 'log_initial_save' ), 10, 2 );
 	}
 
 	/**
@@ -321,5 +331,80 @@ final class Settings {
 		$settings = wp_parse_args( get_option( self::OPTION_NAME, array() ), self::DEFAULTS );
 
 		return $settings[ $key ] ?? ( self::DEFAULTS[ $key ] ?? null );
+	}
+
+	/**
+	 * Records an audit log entry summarizing every field that actually
+	 * changed in a Feature Controls save. Bound to
+	 * update_option_bits_groupsio_sync_settings, which only fires when
+	 * the option's stored value genuinely changed - so a no-op re-save
+	 * never produces a spurious entry. One audit row per save, not one
+	 * per changed field. Per docs/security.md section 3.
+	 *
+	 * @param mixed $old_value Previous option value.
+	 * @param mixed $new_value New option value.
+	 * @return void
+	 */
+	public static function log_change( $old_value, $new_value ): void {
+		$old = is_array( $old_value ) ? $old_value : array();
+		$new = is_array( $new_value ) ? $new_value : array();
+
+		$changes = array();
+
+		foreach ( $new as $key => $value ) {
+			$previous = $old[ $key ] ?? null;
+
+			if ( $previous === $value ) {
+				continue;
+			}
+
+			$changes[] = sprintf( '%s: %s → %s', $key, self::format_value( $previous ), self::format_value( $value ) );
+		}
+
+		if ( empty( $changes ) ) {
+			return;
+		}
+
+		AuditLog::record( 'settings_update', 'success', '', '', get_current_user_id(), implode( '; ', $changes ) );
+	}
+
+	/**
+	 * Same recording as log_change(), for the very first save on a
+	 * fresh install - add_option_{option} fires instead of
+	 * update_option_{option} in that case (the option row doesn't exist
+	 * yet), with no "old value" argument, so the diff is computed
+	 * against self::DEFAULTS (what register_setting()'s own default
+	 * means this option's effective value already was).
+	 *
+	 * @param string $option Option name (always self::OPTION_NAME - required by the add_option_{option} hook signature).
+	 * @param mixed  $value  The value being saved for the first time.
+	 * @return void
+	 */
+	public static function log_initial_save( string $option, $value ): void {
+		self::log_change( self::DEFAULTS, $value );
+	}
+
+	/**
+	 * Formats one setting value for the human-readable audit summary -
+	 * plain (string) casting renders booleans as '' / '1' and arrays as
+	 * 'Array', neither of which is readable in an audit entry.
+	 *
+	 * @param mixed $value A single setting's value.
+	 * @return string
+	 */
+	private static function format_value( $value ): string {
+		if ( null === $value ) {
+			return '(none)';
+		}
+
+		if ( is_bool( $value ) ) {
+			return $value ? 'true' : 'false';
+		}
+
+		if ( is_array( $value ) ) {
+			return '[' . implode( ', ', array_map( 'strval', $value ) ) . ']';
+		}
+
+		return (string) $value;
 	}
 }

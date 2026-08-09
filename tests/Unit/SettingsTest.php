@@ -2,10 +2,29 @@
 
 namespace BITS\GroupsIOSync\Tests\Unit;
 
+use BITS\GroupsIOSync\AuditLog;
 use BITS\GroupsIOSync\Settings;
 use WP_UnitTestCase;
 
 final class SettingsTest extends WP_UnitTestCase {
+
+	public function set_up(): void {
+		parent::set_up();
+
+		AuditLog::create_table();
+
+		global $wpdb;
+		$wpdb->query( 'DELETE FROM ' . AuditLog::table_name() );
+		delete_option( Settings::OPTION_NAME );
+	}
+
+	private function last_audit_row(): ?array {
+		global $wpdb;
+
+		$row = $wpdb->get_row( 'SELECT * FROM ' . AuditLog::table_name() . ' ORDER BY id DESC LIMIT 1', ARRAY_A );
+
+		return $row ?: null;
+	}
 
 	public function test_clamp_int_clamps_below_minimum(): void {
 		$this->assertSame( 0, Settings::clamp_int( -5, 0, 30 ) );
@@ -208,5 +227,116 @@ final class SettingsTest extends WP_UnitTestCase {
 		Settings::register_setting();
 
 		$this->assertTrue( true );
+	}
+
+	public function test_log_change_records_a_boolean_field_toggle(): void {
+		Settings::log_change(
+			array_merge( self::default_settings(), array( 'kill_switch' => false ) ),
+			array_merge( self::default_settings(), array( 'kill_switch' => true ) )
+		);
+
+		$row = $this->last_audit_row();
+		$this->assertNotNull( $row );
+		$this->assertSame( 'settings_update', $row['action'] );
+		$this->assertSame( 'success', $row['outcome'] );
+		$this->assertSame( '', $row['target_email'] );
+		$this->assertSame( '', $row['subgroup_id'] );
+		$this->assertStringContainsString( 'kill_switch: false → true', $row['api_response_detail'] );
+	}
+
+	public function test_log_change_records_a_numeric_field_change(): void {
+		Settings::log_change(
+			array_merge( self::default_settings(), array( 'grace_period_days' => 3 ) ),
+			array_merge( self::default_settings(), array( 'grace_period_days' => 10 ) )
+		);
+
+		$this->assertStringContainsString( 'grace_period_days: 3 → 10', $this->last_audit_row()['api_response_detail'] );
+	}
+
+	public function test_log_change_records_an_array_field_change(): void {
+		Settings::log_change(
+			array_merge( self::default_settings(), array( 'global_mandatory_groups' => array() ) ),
+			array_merge( self::default_settings(), array( 'global_mandatory_groups' => array( 'announcements', 'general' ) ) )
+		);
+
+		$this->assertStringContainsString(
+			'global_mandatory_groups: [] → [announcements, general]',
+			$this->last_audit_row()['api_response_detail']
+		);
+	}
+
+	public function test_log_change_summarizes_every_changed_field_in_one_row(): void {
+		Settings::log_change(
+			array_merge( self::default_settings(), array( 'kill_switch' => false, 'grace_period_days' => 3 ) ),
+			array_merge( self::default_settings(), array( 'kill_switch' => true, 'grace_period_days' => 10 ) )
+		);
+
+		global $wpdb;
+		$count = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . AuditLog::table_name() );
+		$this->assertSame( 1, $count, 'One save changing two fields must produce exactly one audit row.' );
+
+		$detail = $this->last_audit_row()['api_response_detail'];
+		$this->assertStringContainsString( 'kill_switch: false → true', $detail );
+		$this->assertStringContainsString( 'grace_period_days: 3 → 10', $detail );
+	}
+
+	public function test_log_change_records_the_saving_admins_identity(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		Settings::log_change(
+			array_merge( self::default_settings(), array( 'kill_switch' => false ) ),
+			array_merge( self::default_settings(), array( 'kill_switch' => true ) )
+		);
+
+		$this->assertSame( (string) $admin_id, $this->last_audit_row()['user_id'] );
+	}
+
+	public function test_log_change_records_nothing_when_no_field_actually_changed(): void {
+		Settings::log_change( self::default_settings(), self::default_settings() );
+
+		global $wpdb;
+		$count = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . AuditLog::table_name() );
+		$this->assertSame( 0, $count );
+	}
+
+	public function test_a_real_update_option_call_triggers_audit_logging_via_the_registered_hook(): void {
+		Settings::register();
+		update_option( Settings::OPTION_NAME, self::default_settings() );
+
+		// The setup above is itself the "first save" (add_option path) -
+		// clear it out so this test isolates a genuine update to an
+		// already-existing option.
+		global $wpdb;
+		$wpdb->query( 'DELETE FROM ' . AuditLog::table_name() );
+
+		update_option( Settings::OPTION_NAME, array_merge( self::default_settings(), array( 'kill_switch' => true ) ) );
+
+		$this->assertStringContainsString( 'kill_switch: false → true', $this->last_audit_row()['api_response_detail'] );
+	}
+
+	public function test_the_very_first_save_on_a_fresh_install_is_diffed_against_defaults(): void {
+		// set_up() already delete_option()'d Settings::OPTION_NAME, so
+		// this update_option() call is a brand-new row - WordPress takes
+		// the add_option() path, firing add_option_{option} rather than
+		// update_option_{option}.
+		Settings::register();
+		update_option( Settings::OPTION_NAME, array_merge( self::default_settings(), array( 'kill_switch' => true ) ) );
+
+		$this->assertStringContainsString( 'kill_switch: false → true', $this->last_audit_row()['api_response_detail'] );
+	}
+
+	private static function default_settings(): array {
+		return array(
+			'global_mandatory_groups'              => array(),
+			'grace_period_days'                    => 3,
+			'log_retention_days'                   => 90,
+			'kill_switch'                           => false,
+			'mass_action_threshold_count'          => 20,
+			'mass_action_threshold_window_minutes' => 10,
+			'magic_link_rate_limit_per_email_hour' => 3,
+			'magic_link_rate_limit_per_ip_hour'    => 10,
+			'dry_run_mode'                         => true,
+		);
 	}
 }

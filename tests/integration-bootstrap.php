@@ -27,6 +27,12 @@ if ( ! defined( 'GROUPS_IO_PARENT_GROUP' ) && getenv( 'GROUPS_IO_TEST_PARENT_GRO
  */
 function bits_groupsio_sync_integration_load_plugin(): void {
 	require dirname( __DIR__ ) . '/group-manager.php';
+
+	// See the matching comment in tests/bootstrap.php - Settings' audit
+	// hooks are registered once here for the whole suite, so the audit
+	// table must always exist, same as it does in real usage from
+	// plugin activation onward.
+	\BITS\GroupsIOSync\AuditLog::create_table();
 }
 tests_add_filter( 'muplugins_loaded', 'bits_groupsio_sync_integration_load_plugin' );
 
