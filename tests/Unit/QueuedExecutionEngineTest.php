@@ -11,8 +11,12 @@ final class QueuedExecutionEngineTest extends WP_UnitTestCase {
 
 	private const HOOK = 'bits_groupsio_execute_queued_action';
 
+	private static ?array $last_request = null;
+
 	public function set_up(): void {
 		parent::set_up();
+
+		self::$last_request = null;
 
 		if ( ! defined( 'GROUPS_IO_API_KEY' ) ) {
 			define( 'GROUPS_IO_API_KEY', 'fake-test-key-not-real' );
@@ -48,7 +52,12 @@ final class QueuedExecutionEngineTest extends WP_UnitTestCase {
 	private function mock_response( array $response ): void {
 		add_filter(
 			'pre_http_request',
-			static function () use ( $response ) {
+			static function ( $preempt, $parsed_args, $url ) use ( $response ) {
+				QueuedExecutionEngineTest::$last_request = array(
+					'url'  => $url,
+					'args' => $parsed_args,
+				);
+
 				return $response;
 			},
 			10,
@@ -183,5 +192,58 @@ final class QueuedExecutionEngineTest extends WP_UnitTestCase {
 		$notifications = get_option( 'bits_groupsio_admin_notifications' );
 		$this->assertCount( 1, $notifications );
 		$this->assertSame( 'failure', $notifications[0]['type'] );
+	}
+
+	/**
+	 * The tests above only assert on this job's *side effects* (index
+	 * row, audit row, notification) - they never confirm execute() ever
+	 * actually made an HTTP call, let alone the right one. This asserts
+	 * directly against the request pre_http_request captured: that a
+	 * queued add job results in exactly the same POST .../directadd
+	 * request shape GroupsIoApiClientTest already confirms direct_add()
+	 * itself produces, proving the engine really does invoke the real
+	 * API client rather than, say, silently short-circuiting.
+	 */
+	public function test_execute_add_sends_the_expected_directadd_request(): void {
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'ok' ) ) );
+
+		QueuedExecutionEngine::execute( $this->add_job() );
+
+		$this->assertNotNull( self::$last_request, 'execute() never made an HTTP request.' );
+		$this->assertStringContainsString( 'directadd', self::$last_request['url'] );
+		$this->assertSame( 'POST', self::$last_request['args']['method'] );
+		$this->assertSame(
+			array(
+				'group_name'  => GROUPS_IO_PARENT_GROUP,
+				'emails'      => 'add-target@example.test',
+				'subgroupids' => '900002',
+			),
+			self::$last_request['args']['body']
+		);
+	}
+
+	/**
+	 * Same rationale as test_execute_add_sends_the_expected_directadd_request()
+	 * - confirms a remove job results in the exact POST .../removemember
+	 * request Groups.io's contract requires, keyed on the member_info_id
+	 * resolved from the local index (not email/subgroup_id, which
+	 * removemember does not accept).
+	 */
+	public function test_execute_remove_sends_the_expected_removemember_request(): void {
+		global $wpdb;
+		$wpdb->insert( MemberIndex::table_name(), array(
+			'email' => 'remove-target@example.test', 'subgroup_id' => 900003,
+			'subgroup_slug' => 'perception-is-all+list', 'member_info_id' => 555,
+			'synced_at' => current_time( 'mysql', true ),
+		) );
+
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'ok' ) ) );
+
+		QueuedExecutionEngine::execute( $this->remove_job() );
+
+		$this->assertNotNull( self::$last_request, 'execute() never made an HTTP request.' );
+		$this->assertStringContainsString( 'removemember', self::$last_request['url'] );
+		$this->assertSame( 'POST', self::$last_request['args']['method'] );
+		$this->assertSame( array( 'member_info_id' => 555 ), self::$last_request['args']['body'] );
 	}
 }
