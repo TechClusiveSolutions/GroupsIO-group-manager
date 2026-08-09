@@ -44,6 +44,16 @@ tests_add_filter( 'muplugins_loaded', 'bits_groupsio_sync_manually_load_pmpro' )
  */
 function bits_groupsio_sync_manually_load_plugin(): void {
 	require dirname( __DIR__ ) . '/group-manager.php';
+
+	// The plugin's own hook registration (Settings::register(), etc.)
+	// happens once here, for the whole suite - not per test file. That
+	// includes Settings' add_option_/update_option_ hooks, which write
+	// to the audit table on any Settings save anywhere in the suite, not
+	// just from SettingsTest.php's own tests. In real usage the audit
+	// table always exists (created on plugin activation), so it's
+	// created here too, once, rather than leaving it to whichever
+	// individual test file happens to touch it first.
+	\BITS\GroupsIOSync\AuditLog::create_table();
 }
 tests_add_filter( 'muplugins_loaded', 'bits_groupsio_sync_manually_load_plugin' );
 
