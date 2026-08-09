@@ -7,6 +7,7 @@
 
 namespace BITS\GroupsIOSync;
 
+use BITS\GroupsIOSync\Admin\AdminNotifications;
 use BITS\GroupsIOSync\Admin\GroupsIoManagementMenu;
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -47,6 +48,8 @@ final class Plugin {
 		Settings::register();
 		LevelMandatoryGroups::register();
 		MemberIndex::register();
+		QueuedExecutionEngine::register();
+		AdminNotifications::register();
 		GroupsIoManagementMenu::register();
 
 		// Remaining subsystems (Groups.io client, sync engine, magic link,

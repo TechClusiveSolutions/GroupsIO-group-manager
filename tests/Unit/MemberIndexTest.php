@@ -69,8 +69,13 @@ final class MemberIndexTest extends WP_UnitTestCase {
 		return $this->json_response( 200, array( 'object' => 'list', 'data' => $rows ) );
 	}
 
-	private function member_row( string $email, string $full_name = '' ): array {
-		return array( 'email' => $email, 'full_name' => $full_name );
+	private function member_row( string $email, string $full_name = '', ?int $id = null ): array {
+		$row = array( 'email' => $email, 'full_name' => $full_name );
+		if ( null !== $id ) {
+			$row['id'] = $id;
+		}
+
+		return $row;
 	}
 
 	private function fetch_row( string $email, int $subgroup_id ): ?array {
@@ -299,5 +304,72 @@ final class MemberIndexTest extends WP_UnitTestCase {
 
 		$untouched = $this->fetch_row( 'other-owner@example.test', 1 );
 		$this->assertSame( 'removed', $untouched['override_type'] );
+	}
+
+	public function test_sync_stores_member_info_id_from_getmembers_response(): void {
+		$this->queue_responses( array(
+			$this->group_response( 900001, 'perception-is-all' ),
+			$this->members_list_response( array( $this->member_row( 'member@example.test', '', 555 ) ) ),
+			$this->subgroups_list_response( array() ),
+		) );
+
+		MemberIndex::sync();
+
+		$row = $this->fetch_row( 'member@example.test', 900001 );
+		$this->assertSame( '555', $row['member_info_id'] );
+	}
+
+	public function test_sync_leaves_member_info_id_null_when_getmembers_response_omits_id(): void {
+		$this->queue_responses( array(
+			$this->group_response( 900001, 'perception-is-all' ),
+			$this->members_list_response( array( $this->member_row( 'member@example.test' ) ) ),
+			$this->subgroups_list_response( array() ),
+		) );
+
+		MemberIndex::sync();
+
+		$row = $this->fetch_row( 'member@example.test', 900001 );
+		$this->assertNull( $row['member_info_id'] );
+	}
+
+	public function test_get_member_info_id_returns_stored_value(): void {
+		global $wpdb;
+
+		$wpdb->insert( MemberIndex::table_name(), array(
+			'email' => 'lookup@example.test', 'subgroup_id' => 42, 'subgroup_slug' => 'perception-is-all+a',
+			'member_info_id' => 777, 'synced_at' => current_time( 'mysql', true ),
+		) );
+
+		$this->assertSame( 777, MemberIndex::get_member_info_id( 'lookup@example.test', 42 ) );
+	}
+
+	public function test_get_member_info_id_returns_null_when_no_matching_row(): void {
+		$this->assertNull( MemberIndex::get_member_info_id( 'nobody@example.test', 999 ) );
+	}
+
+	public function test_apply_add_upserts_row_and_sets_override_flag(): void {
+		MemberIndex::apply_add( 5, 'added-member@example.test', 'Added Member', 900002, 'perception-is-all+list', 'List', 9 );
+
+		$row = $this->fetch_row( 'added-member@example.test', 900002 );
+		$this->assertNotNull( $row );
+		$this->assertSame( 'Added Member', $row['display_name'] );
+		$this->assertSame( 'added', $row['override_type'] );
+		$this->assertSame( '9', $row['override_by'] );
+		$this->assertNotEmpty( $row['override_at'] );
+	}
+
+	public function test_apply_remove_sets_override_flag_on_existing_row(): void {
+		global $wpdb;
+
+		$wpdb->insert( MemberIndex::table_name(), array(
+			'email' => 'removed-member@example.test', 'subgroup_id' => 900003,
+			'subgroup_slug' => 'perception-is-all+list', 'synced_at' => current_time( 'mysql', true ),
+		) );
+
+		MemberIndex::apply_remove( 'removed-member@example.test', 900003, 4 );
+
+		$row = $this->fetch_row( 'removed-member@example.test', 900003 );
+		$this->assertSame( 'removed', $row['override_type'] );
+		$this->assertSame( '4', $row['override_by'] );
 	}
 }

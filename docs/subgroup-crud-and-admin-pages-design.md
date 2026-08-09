@@ -202,6 +202,12 @@ subgroup on every page load or search.
   `(member, subgroup)` pair, columns approximately `id`, `user_id`
   (nullable — not every Groups.io member is necessarily a matched WP user),
   `email`, `display_name`, `subgroup_id`, `subgroup_slug`, `subgroup_title`,
+  `member_info_id` (nullable — Groups.io's own per-membership-record
+  numeric ID for this `(email, subgroup)` pairing, taken verbatim from
+  `get_members()`'s response; added 2026-08-07 once section 8's queued
+  remove job turned out to need it — `GroupsIoApiClient::remove_member()`
+  is keyed on `member_info_id`, not email or subgroup, and it isn't
+  otherwise derivable without an extra live lookup at job-execution time),
   `pmpro_expected` (bool — whether this pairing is expected per the
   member's current PMPro level, computed from `LevelMandatoryGroups` +
   `Settings::global_mandatory_groups`), `override_type` (nullable —
@@ -273,10 +279,18 @@ potentially many subgroups make a fully synchronous request impractical.
   whole batch, since `direct_add()`/`remove_member()` are themselves
   single-subgroup/single-target operations.
 * **Background execution**: each queued job is an Action Scheduler action
-  that calls the actual `direct_add()`/`remove_member()`, with up to 3
-  retries on failure (exact retry/backoff mechanism — Action Scheduler's
-  own built-in retry support vs. manually rescheduling — decided at
-  implementation time).
+  that calls the actual `direct_add()`/`remove_member()`. **Resolved
+  2026-08-07**: Action Scheduler has no built-in automatic-retry-on-failure
+  behavior of its own (a failed action is simply marked `failed`, once);
+  retries are implemented manually — the action's args carry an `attempt`
+  counter (starting at 1), and on a caught API/transport exception with
+  `attempt < 3` the job reschedules itself as a new single Action Scheduler
+  action (`as_schedule_single_action()`) with `attempt` incremented and a
+  short fixed backoff delay (1 minute), rather than immediately re-running
+  in the same request. At `attempt === 3` a further failure is exhaustion
+  — see below. A `remove` job resolves its target via the local index's
+  new `member_info_id` column (see section 6) rather than an extra live
+  Groups.io lookup.
 * **On success** (first attempt or after a retry): the job updates the
   local member-index row (section 6) to reflect the new actual state,
   writes the sticky-override flag (`override_type`/`override_by`/
@@ -290,19 +304,30 @@ potentially many subgroups make a fully synchronous request impractical.
 * **Admin notifications**: WordPress has no built-in persistent
   notification center — a page-load-only `admin_notices` hook can't
   represent an outcome that becomes known *after* the request that
-  triggered it, since the job runs asynchronously. This section adds a
-  small persisted-notification mechanism (a new table or option-backed
-  queue — exact storage decided at implementation time) that:
+  triggered it, since the job runs asynchronously. **Resolved
+  2026-08-07**: a single `wp_options` row (autoloaded `false`, e.g.
+  `bits_groupsio_admin_notifications`) storing a small array of pending
+  notification records (`id`, `type` — `success`/`failure`, `message`),
+  rather than a new dedicated table — this queue is small (only currently
+  pending, undismissed notices) and short-lived by nature, unlike the
+  audit log or member index, so a table's schema/indexing overhead isn't
+  warranted. This mechanism:
   * Records one notification per job outcome — both success and failure,
     per explicit direction, not just failure.
   * Renders each pending notification as its own distinct, individually
-    dismissible admin notice on the next admin page load — multiple
-    notifications display as multiple separate notices, never merged or
-    collapsed into one, even when several jobs from the same bulk action
-    complete around the same time.
-  * A notification is cleared once the admin dismisses it (standard
-    WordPress dismissible-notice pattern), not automatically on next
-    page load.
+    dismissible (`notice is-dismissible`) admin notice on the next admin
+    page load — multiple notifications display as multiple separate
+    notices, never merged or collapsed into one, even when several jobs
+    from the same bulk action complete around the same time. Success and
+    failure are distinguished in the notice's text (not by CSS notice
+    class/color alone), per the accessibility acceptance criterion.
+  * A notification is cleared once the admin dismisses it, via a small
+    `wp_ajax_bits_groupsio_dismiss_notification` handler (nonce-checked)
+    that removes that one record from the option's array server-side —
+    WordPress core's own `is-dismissible` notices only hide the DOM node
+    client-side and don't persist dismissal, which isn't sufficient here
+    since a plain page-load hides nothing on its own; this queue's records
+    must be actively removed once seen, not merely visually hidden.
 
 ### 9. Admin Pages: Menu Structure
 
