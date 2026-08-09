@@ -24,9 +24,9 @@ if ( ! defined( 'ABSPATH' ) ) {
  *
  * Single responsibility: this class only maintains the index (schema,
  * sync, and the override flag's storage/auto-clear) - it does not itself
- * call direct_add()/remove_member() or render any admin UI. The queued
- * execution engine that performs adds/removes and updates this index's
- * rows on success lives in a later phase.
+ * call direct_add()/remove_member() or render any admin UI. QueuedExecutionEngine
+ * performs the actual adds/removes and calls apply_add()/apply_remove()
+ * below on success to update this index's rows and override columns.
  */
 final class MemberIndex {
 
@@ -75,6 +75,7 @@ final class MemberIndex {
 			subgroup_id BIGINT UNSIGNED NOT NULL,
 			subgroup_slug VARCHAR(255) NOT NULL,
 			subgroup_title VARCHAR(255) NOT NULL DEFAULT '',
+			member_info_id BIGINT UNSIGNED NULL,
 			pmpro_expected TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
 			override_type VARCHAR(20) NULL,
 			override_by BIGINT UNSIGNED NULL,
@@ -208,6 +209,7 @@ final class MemberIndex {
 				$subgroup_id,
 				$subgroup_slug,
 				$subgroup_title,
+				isset( $member['id'] ) ? (int) $member['id'] : null,
 				self::is_expected( $user_id, $subgroup_slug )
 			);
 		}
@@ -252,13 +254,14 @@ final class MemberIndex {
 	 * override_type/override_by/override_at columns - those are owned
 	 * by clear_overrides_for_user() and the queued execution engine.
 	 *
-	 * @param int    $user_id        Matched WP user id, or 0 if none.
-	 * @param string $email          Member's email address.
-	 * @param string $display_name   Member's display name, if known.
-	 * @param int    $subgroup_id    Numeric Groups.io group/subgroup id.
-	 * @param string $subgroup_slug  Full slug.
-	 * @param string $subgroup_title Cosmetic title, if any.
-	 * @param bool   $pmpro_expected Whether this pairing is PMPro-expected.
+	 * @param int      $user_id        Matched WP user id, or 0 if none.
+	 * @param string   $email          Member's email address.
+	 * @param string   $display_name   Member's display name, if known.
+	 * @param int      $subgroup_id    Numeric Groups.io group/subgroup id.
+	 * @param string   $subgroup_slug  Full slug.
+	 * @param string   $subgroup_title Cosmetic title, if any.
+	 * @param int|null $member_info_id Groups.io's per-membership-record id for this (email, subgroup) pairing, or null if unknown.
+	 * @param bool     $pmpro_expected Whether this pairing is PMPro-expected.
 	 * @return void
 	 */
 	private static function upsert_row(
@@ -268,22 +271,32 @@ final class MemberIndex {
 		int $subgroup_id,
 		string $subgroup_slug,
 		string $subgroup_title,
+		?int $member_info_id,
 		bool $pmpro_expected
 	): void {
 		global $wpdb;
 
 		$table = self::table_name();
 
+		// wpdb::prepare()'s %d placeholder casts null to 0, not SQL NULL,
+		// so a genuinely unknown member_info_id (older synced rows, or a
+		// getmembers() response missing 'id') needs a literal NULL
+		// placeholder instead - the value itself is always either null or
+		// an int we produced ourselves (never user input), so this literal
+		// substitution carries no injection risk.
+		$member_info_id_sql = null === $member_info_id ? 'NULL' : (string) $member_info_id;
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is our own fixed table name (self::table_name()); $member_info_id_sql is either the literal 'NULL' or a cast-to-string int, not user input. Both are interpolated across this multi-line SQL string, so the ignore is scoped to the whole statement below rather than a single line.
 		$sql = $wpdb->prepare(
-			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is our own fixed table name (self::table_name()), not user input.
 			"INSERT INTO $table
-			(user_id, email, display_name, subgroup_id, subgroup_slug, subgroup_title, pmpro_expected, synced_at)
-			VALUES (%d, %s, %s, %d, %s, %s, %d, %s)
+			(user_id, email, display_name, subgroup_id, subgroup_slug, subgroup_title, member_info_id, pmpro_expected, synced_at)
+			VALUES (%d, %s, %s, %d, %s, %s, $member_info_id_sql, %d, %s)
 			ON DUPLICATE KEY UPDATE
 				user_id = VALUES(user_id),
 				display_name = VALUES(display_name),
 				subgroup_slug = VALUES(subgroup_slug),
 				subgroup_title = VALUES(subgroup_title),
+				member_info_id = VALUES(member_info_id),
 				pmpro_expected = VALUES(pmpro_expected),
 				synced_at = VALUES(synced_at)",
 			$user_id,
@@ -295,9 +308,93 @@ final class MemberIndex {
 			$pmpro_expected ? 1 : 0,
 			current_time( 'mysql', true )
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- an upsert (INSERT ... ON DUPLICATE KEY UPDATE) has no $wpdb->insert()/update() equivalent; $sql was already built via $wpdb->prepare() above; this table isn't object-cached, matching AuditLog's own uncached direct-write convention.
 		$wpdb->query( $sql );
+	}
+
+	/**
+	 * Called by QueuedExecutionEngine on a successful add. Upserts the
+	 * (member, subgroup) row so it reflects the new membership even
+	 * before the next hourly sync confirms it, then sets the sticky
+	 * override flag. member_info_id is left null here — Groups.io's
+	 * directadd response doesn't return it, so it's backfilled by the
+	 * next sync() run.
+	 *
+	 * @param int    $user_id        Matched WP user id of the member added, or 0 if none.
+	 * @param string $email          Member's email address.
+	 * @param string $display_name   Member's display name, if known.
+	 * @param int    $subgroup_id    Numeric Groups.io group/subgroup id added to.
+	 * @param string $subgroup_slug  Full slug.
+	 * @param string $subgroup_title Cosmetic title, if any.
+	 * @param int    $admin_user_id  WP user id of the admin who queued the action.
+	 * @return void
+	 */
+	public static function apply_add(
+		int $user_id,
+		string $email,
+		string $display_name,
+		int $subgroup_id,
+		string $subgroup_slug,
+		string $subgroup_title,
+		int $admin_user_id
+	): void {
+		self::upsert_row(
+			$user_id,
+			$email,
+			$display_name,
+			$subgroup_id,
+			$subgroup_slug,
+			$subgroup_title,
+			null,
+			self::is_expected( $user_id, $subgroup_slug )
+		);
+
+		self::set_override( $email, $subgroup_id, 'added', $admin_user_id );
+	}
+
+	/**
+	 * Called by QueuedExecutionEngine on a successful remove. Sets the
+	 * sticky override flag on the existing (member, subgroup) row - the
+	 * row itself is left in place (not deleted) since it still carries
+	 * the override state the Details view needs to display, and the row
+	 * will be corrected or cleaned up on the next sync() run.
+	 *
+	 * @param string $email         Member's email address.
+	 * @param int    $subgroup_id   Numeric Groups.io group/subgroup id removed from.
+	 * @param int    $admin_user_id WP user id of the admin who queued the action.
+	 * @return void
+	 */
+	public static function apply_remove( string $email, int $subgroup_id, int $admin_user_id ): void {
+		self::set_override( $email, $subgroup_id, 'removed', $admin_user_id );
+	}
+
+	/**
+	 * Writes the sticky override columns for one (email, subgroup) row.
+	 *
+	 * @param string $email         Member's email address.
+	 * @param int    $subgroup_id   Numeric Groups.io group/subgroup id.
+	 * @param string $override_type 'added' or 'removed'.
+	 * @param int    $admin_user_id WP user id of the admin who queued the action.
+	 * @return void
+	 */
+	private static function set_override( string $email, int $subgroup_id, string $override_type, int $admin_user_id ): void {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- this table isn't object-cached, matching AuditLog's own uncached direct-write convention.
+		$wpdb->update(
+			self::table_name(),
+			array(
+				'override_type' => $override_type,
+				'override_by'   => $admin_user_id,
+				'override_at'   => current_time( 'mysql', true ),
+			),
+			array(
+				'email'       => $email,
+				'subgroup_id' => $subgroup_id,
+			)
+		);
 	}
 
 	/**
@@ -322,6 +419,33 @@ final class MemberIndex {
 			),
 			array( 'user_id' => $user_id )
 		);
+	}
+
+	/**
+	 * Reads the member_info_id stored for one (email, subgroup) row, for
+	 * QueuedExecutionEngine's remove job to pass to
+	 * GroupsIoApiClient::remove_member(). Returns null if no matching
+	 * row exists, or the row's member_info_id itself is null (not yet
+	 * backfilled by a sync() run).
+	 *
+	 * @param string $email       Member's email address.
+	 * @param int    $subgroup_id Numeric Groups.io group/subgroup id.
+	 * @return int|null
+	 */
+	public static function get_member_info_id( string $email, int $subgroup_id ): ?int {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- this table isn't object-cached, matching AuditLog's own uncached direct-write convention.
+		$value = $wpdb->get_var(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- self::table_name() is our own fixed table name, not user input.
+				'SELECT member_info_id FROM ' . self::table_name() . ' WHERE email = %s AND subgroup_id = %d',
+				$email,
+				$subgroup_id
+			)
+		);
+
+		return null === $value ? null : (int) $value;
 	}
 
 	/**
