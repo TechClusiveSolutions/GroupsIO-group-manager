@@ -33,6 +33,7 @@ function bits_groupsio_sync_integration_load_plugin(): void {
 	// table must always exist, same as it does in real usage from
 	// plugin activation onward.
 	\BITS\GroupsIOSync\AuditLog::create_table();
+	\BITS\GroupsIOSync\MemberIndex::create_table();
 }
 tests_add_filter( 'muplugins_loaded', 'bits_groupsio_sync_integration_load_plugin' );
 

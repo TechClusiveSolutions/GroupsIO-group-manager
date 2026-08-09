@@ -449,6 +449,118 @@ final class MemberIndex {
 	}
 
 	/**
+	 * Total number of distinct members in the index, optionally filtered
+	 * by a search term matched against member name/email or subgroup
+	 * name/slug/title. Backs the User Assignment List page's pagination,
+	 * per subgroup-crud-and-admin-pages-design.md section 12.
+	 *
+	 * @param string $search Optional search term.
+	 * @return int
+	 */
+	public static function count_members( string $search = '' ): int {
+		global $wpdb;
+
+		$table = self::table_name();
+
+		if ( '' === $search ) {
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is our own fixed table name (self::table_name()), not user input; there is no other value to prepare in this branch.
+			return (int) $wpdb->get_var( "SELECT COUNT(DISTINCT email) FROM $table" );
+			// phpcs:enable
+		}
+
+		list( $where_sql, $params ) = self::search_where( $search );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- $table is our own fixed table name; $where_sql is a fixed fragment built by search_where() containing only placeholders, filled by $params below.
+		$sql = $wpdb->prepare(
+			"SELECT COUNT(DISTINCT email) FROM $table WHERE email IN ( SELECT DISTINCT email FROM $table WHERE $where_sql )",
+			$params
+		);
+		// phpcs:enable
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $sql was already built via $wpdb->prepare() above.
+		return (int) $wpdb->get_var( $sql );
+	}
+
+	/**
+	 * Returns one page of distinct members for the User Assignment List
+	 * page, each as {email, display_name, group_count} - group_count is
+	 * the member's total subgroup-membership count (parent + subgroups)
+	 * across the whole index, not just rows matching a search term. A
+	 * search term matching a subgroup name/slug/title still returns the
+	 * member's full group count, per section 12's "matches against
+	 * member name, email, or subgroup name/slug" acceptance criterion.
+	 *
+	 * @param int    $page     1-based page number.
+	 * @param int    $per_page Rows per page.
+	 * @param string $search   Optional search term.
+	 * @return array<int, array{email: string, display_name: string, group_count: int}>
+	 */
+	public static function get_members_page( int $page, int $per_page, string $search = '' ): array {
+		global $wpdb;
+
+		$table  = self::table_name();
+		$offset = max( 0, ( max( 1, $page ) - 1 ) * $per_page );
+
+		if ( '' === $search ) {
+			$where_sql = '1=1';
+			$params    = array();
+		} else {
+			list( $sub_where_sql, $sub_params ) = self::search_where( $search );
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is our own fixed table name; $sub_where_sql is a fixed fragment built by search_where() containing only placeholders, filled via $sub_params below.
+			$where_sql = "email IN ( SELECT DISTINCT email FROM $table WHERE $sub_where_sql )";
+			$params    = $sub_params;
+		}
+
+		$params[] = $per_page;
+		$params[] = $offset;
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- $table is our own fixed table name; $where_sql is a fixed fragment (either the literal '1=1' or search_where()'s placeholder-only output); both are interpolated across this multi-line SQL string, so the disable is scoped to the whole statement, matching upsert_row()'s own convention above.
+		$sql = $wpdb->prepare(
+			"SELECT email, MAX(display_name) AS display_name, COUNT(DISTINCT subgroup_id) AS group_count
+			FROM $table
+			WHERE $where_sql
+			GROUP BY email
+			ORDER BY MAX(display_name) ASC, email ASC
+			LIMIT %d OFFSET %d",
+			$params
+		);
+		// phpcs:enable
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $sql was already built via $wpdb->prepare() above.
+		$rows = $wpdb->get_results( $sql, ARRAY_A );
+
+		return array_map(
+			static function ( array $row ): array {
+				return array(
+					'email'        => (string) $row['email'],
+					'display_name' => (string) $row['display_name'],
+					'group_count'  => (int) $row['group_count'],
+				);
+			},
+			(array) $rows
+		);
+	}
+
+	/**
+	 * Builds a WHERE fragment (with %s placeholders) matching a search
+	 * term against member email/display_name or subgroup
+	 * slug/title, for count_members()/get_members_page() above.
+	 *
+	 * @param string $search Search term (already non-empty).
+	 * @return array{0: string, 1: array<int, string>} WHERE SQL fragment and its placeholder values, in order.
+	 */
+	private static function search_where( string $search ): array {
+		global $wpdb;
+
+		$like = '%' . $wpdb->esc_like( $search ) . '%';
+
+		return array(
+			'( email LIKE %s OR display_name LIKE %s OR subgroup_slug LIKE %s OR subgroup_title LIKE %s )',
+			array( $like, $like, $like, $like ),
+		);
+	}
+
+	/**
 	 * Reads the configured parent group slug.
 	 *
 	 * @return string

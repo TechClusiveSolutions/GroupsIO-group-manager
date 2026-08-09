@@ -372,4 +372,66 @@ final class MemberIndexTest extends WP_UnitTestCase {
 		$this->assertSame( 'removed', $row['override_type'] );
 		$this->assertSame( '4', $row['override_by'] );
 	}
+
+	public function test_count_members_counts_distinct_members_not_rows(): void {
+		MemberIndex::apply_add( 0, 'a@example.test', 'A', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'a@example.test', 'A', 2, 'perception-is-all+x', '', 1 );
+		MemberIndex::apply_add( 0, 'b@example.test', 'B', 1, 'perception-is-all', '', 1 );
+
+		$this->assertSame( 2, MemberIndex::count_members() );
+	}
+
+	public function test_count_members_with_search_matches_email(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'bob@example.test', 'Bob', 1, 'perception-is-all', '', 1 );
+
+		$this->assertSame( 1, MemberIndex::count_members( 'alice@' ) );
+	}
+
+	public function test_count_members_with_search_matches_subgroup_slug(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', '', 1 );
+		MemberIndex::apply_add( 0, 'bob@example.test', 'Bob', 1, 'perception-is-all', '', 1 );
+
+		$this->assertSame( 1, MemberIndex::count_members( 'announcements' ) );
+	}
+
+	public function test_get_members_page_returns_name_email_and_total_group_count(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', '', 1 );
+
+		$rows = MemberIndex::get_members_page( 1, 20 );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'alice@example.test', $rows[0]['email'] );
+		$this->assertSame( 'Alice', $rows[0]['display_name'] );
+		$this->assertSame( 2, $rows[0]['group_count'] );
+	}
+
+	public function test_get_members_page_search_by_subgroup_returns_full_group_count(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', '', 1 );
+		MemberIndex::apply_add( 0, 'bob@example.test', 'Bob', 1, 'perception-is-all', '', 1 );
+
+		$rows = MemberIndex::get_members_page( 1, 20, 'announcements' );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'alice@example.test', $rows[0]['email'] );
+		$this->assertSame( 2, $rows[0]['group_count'], 'Full group count, not just the matched subgroup.' );
+	}
+
+	public function test_get_members_page_respects_page_and_per_page(): void {
+		for ( $i = 1; $i <= 5; $i++ ) {
+			MemberIndex::apply_add( 0, "member{$i}@example.test", sprintf( 'Member %d', $i ), 1, 'perception-is-all', '', 1 );
+		}
+
+		$page_one = MemberIndex::get_members_page( 1, 2 );
+		$page_two = MemberIndex::get_members_page( 2, 2 );
+		$page_three = MemberIndex::get_members_page( 3, 2 );
+
+		$this->assertCount( 2, $page_one );
+		$this->assertCount( 2, $page_two );
+		$this->assertCount( 1, $page_three );
+		$this->assertNotSame( $page_one[0]['email'], $page_two[0]['email'] );
+	}
 }

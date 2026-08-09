@@ -54,6 +54,7 @@ function bits_groupsio_sync_manually_load_plugin(): void {
 	// created here too, once, rather than leaving it to whichever
 	// individual test file happens to touch it first.
 	\BITS\GroupsIOSync\AuditLog::create_table();
+	\BITS\GroupsIOSync\MemberIndex::create_table();
 }
 tests_add_filter( 'muplugins_loaded', 'bits_groupsio_sync_manually_load_plugin' );
 

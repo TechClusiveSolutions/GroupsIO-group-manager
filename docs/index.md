@@ -25,7 +25,7 @@ Administrators interact with the plugin through a "GroupsIO Management" admin me
 
 * **Feature Controls** — the plugin's own operational configuration: mandatory mailing lists, the grace period before removal on a lapsed membership, log retention, and an emergency kill switch to halt all sync activity. (An audit log of every add/remove action is planned for a later phase - the underlying table exists today, but recording and reading entries is not yet built.)
 * **Subgroup Management** — direct administration of the underlying Groups.io subgroups themselves (as opposed to member sync, which is automatic): a list of every subgroup showing its full address and member count, a page to create a new subgroup (name, an optional cosmetic title, and an optional description), and a details page per subgroup to view its live member list, edit its name/title/description, and delete it.
-* **User Assignment** — not yet available; will let an administrator manually add, remove, or suspend a specific member's subgroup access for intervention when automation misbehaves.
+* **User Assignment** — a paginated, searchable list of every member and their total Groups.io group count is available today; per-member Details and Add Groups views (to manually add, remove, or suspend a specific member's subgroup access for intervention when automation misbehaves) are not yet built.
 
 ## Where to Go Next
 
