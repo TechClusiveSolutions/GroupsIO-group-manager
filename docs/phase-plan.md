@@ -65,7 +65,8 @@ Approved as a scope expansion on 2026-07-22 (see `CLAUDE.md`'s Scope Discipline 
 * Build visibility into Action Scheduler queue health (pending/failed job counts) and the per-member audit view.
 * Build the kill switch's actual enforcement (halting all sync processing, including reconciliation, immediately when toggled).
 * Build the admin approval UI for jobs held by the mass-action anomaly circuit breaker (Phase 6), letting an admin review and approve or reject held jobs individually or as a batch.
-* Exit criterion: an admin can see current sync queue/audit health at a glance, toggling the kill switch verifiably halts all sync activity including in-progress reconciliation, and an admin can review and approve a batch of held mass-action jobs.
+* Build a "Deleted Memberships" page (added to the backlog 2026-08-09, during #61's design): surfaces members whose `(member, subgroup)` rows carry the sticky-override flag set to `removed` - the User Assignment Details page (#61) excludes these from its "currently subscribed" list, so this is the only place an admin can see who's been manually removed and when.
+* Exit criterion: an admin can see current sync queue/audit health at a glance, toggling the kill switch verifiably halts all sync activity including in-progress reconciliation, an admin can review and approve a batch of held mass-action jobs, and an admin can view the list of members with a removed-override flag set.
 
 ### Phase 8 — Passwordless Profile Access (Magic Link)
 
