@@ -586,4 +586,60 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 
 		$this->assertTrue( $result['invalid'] );
 	}
+
+	/**
+	 * Regression test: an explicit action="{admin_url}/admin.php" on
+	 * these POST forms strips the page query arg WordPress needs to
+	 * route the submission to this page's own load-{hook} handler -
+	 * maybe_handle_post() never runs, and admin.php renders a blank
+	 * response. None of the process_*() unit tests above catch this,
+	 * since they call the process methods directly and never render or
+	 * inspect the actual <form> tag - only a rendered-output assertion
+	 * like this one does. Every state-changing POST form on this page
+	 * must omit action entirely (submitting back to the current URL, the
+	 * same convention SubgroupManagementPage's own forms use), never set
+	 * an explicit admin.php action.
+	 */
+	public function test_remove_selected_form_omits_action_so_it_posts_back_to_the_current_url(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$_GET['view']   = 'details';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( '<form method="post">', $output );
+		$this->assertStringNotContainsString( 'method="post" action=', $output );
+	}
+
+	public function test_parent_removal_confirmation_form_omits_action_so_it_posts_back_to_the_current_url(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$_GET['view']                  = 'details';
+		$_GET['member']                = 'target@example.test';
+		$_GET['confirm_remove_parent'] = '1';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( '<form method="post">', $output );
+		$this->assertStringNotContainsString( 'method="post" action=', $output );
+	}
+
+	public function test_add_selected_form_omits_action_so_it_posts_back_to_the_current_url(): void {
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+
+		$_GET['view']   = 'add-groups';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( '<form method="post">', $output );
+		$this->assertStringNotContainsString( 'method="post" action=', $output );
+	}
 }

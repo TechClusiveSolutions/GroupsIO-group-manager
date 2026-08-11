@@ -657,7 +657,14 @@ final class UserAssignmentPage {
 	 * @return void
 	 */
 	private static function render_group_table( string $email, array $groups, int $confirm_parent_id ): void {
-		echo '<form method="post" action="' . esc_url( admin_url( 'admin.php' ) ) . '">';
+		// No explicit action attribute - submits back to the current URL
+		// (preserving the page/view/member query args WordPress needs to
+		// route the POST to this page's own load-{hook} handler), same
+		// convention SubgroupManagementPage's own forms use. An explicit
+		// action="{admin_url}/admin.php" here previously stripped the
+		// page query arg entirely, so WordPress had nothing to route the
+		// POST to and rendered a blank response.
+		echo '<form method="post">';
 		wp_nonce_field( self::NONCE_ACTION_REMOVE_SELECTED );
 		echo '<input type="hidden" name="bits_groupsio_action" value="remove_selected" />';
 		printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $email ) );
@@ -799,7 +806,14 @@ final class UserAssignmentPage {
 		echo '<div class="notice notice-warning">';
 		echo '<p>' . esc_html__( "Removing the parent group removes this member from all of BITS' Groups.io presence, not just one list. Are you sure?", 'bits-groupsio-sync' ) . '</p>';
 
-		echo '<form method="post" action="' . esc_url( admin_url( 'admin.php' ) ) . '">';
+		// No explicit action attribute - submits back to the current URL
+		// (preserving the page/view/member query args WordPress needs to
+		// route the POST to this page's own load-{hook} handler), same
+		// convention SubgroupManagementPage's own forms use. An explicit
+		// action="{admin_url}/admin.php" here previously stripped the
+		// page query arg entirely, so WordPress had nothing to route the
+		// POST to and rendered a blank response.
+		echo '<form method="post">';
 		wp_nonce_field( self::NONCE_ACTION_CONFIRM_PARENT_REMOVE );
 		echo '<input type="hidden" name="bits_groupsio_action" value="confirm_parent_remove" />';
 		printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $email ) );
@@ -983,7 +997,14 @@ final class UserAssignmentPage {
 	 * @return void
 	 */
 	private static function render_addable_group_table( string $email, array $groups ): void {
-		echo '<form method="post" action="' . esc_url( admin_url( 'admin.php' ) ) . '">';
+		// No explicit action attribute - submits back to the current URL
+		// (preserving the page/view/member query args WordPress needs to
+		// route the POST to this page's own load-{hook} handler), same
+		// convention SubgroupManagementPage's own forms use. An explicit
+		// action="{admin_url}/admin.php" here previously stripped the
+		// page query arg entirely, so WordPress had nothing to route the
+		// POST to and rendered a blank response.
+		echo '<form method="post">';
 		wp_nonce_field( self::NONCE_ACTION_ADD_SELECTED );
 		echo '<input type="hidden" name="bits_groupsio_action" value="add_selected" />';
 		printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $email ) );
