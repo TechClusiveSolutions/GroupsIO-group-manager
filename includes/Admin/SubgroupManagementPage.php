@@ -11,6 +11,7 @@ use BITS\GroupsIOSync\GroupsIoApiClient;
 use BITS\GroupsIOSync\GroupsIoApiException;
 use BITS\GroupsIOSync\GroupsIoRateLimitException;
 use BITS\GroupsIOSync\GroupsIoTransportException;
+use BITS\GroupsIOSync\QueuedExecutionEngine;
 use BITS\GroupsIOSync\SubgroupIdCache;
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -43,6 +44,7 @@ final class SubgroupManagementPage {
 	private const NONCE_ACTION_CREATE = 'bits_groupsio_create_subgroup';
 	private const NONCE_ACTION_UPDATE = 'bits_groupsio_update_subgroup';
 	private const NONCE_ACTION_DELETE = 'bits_groupsio_delete_subgroup';
+	private const NONCE_ACTION_SYNC   = 'bits_groupsio_sync';
 
 	/**
 	 * Returns this page's fixed notice vocabulary as {code: [type,
@@ -69,6 +71,9 @@ final class SubgroupManagementPage {
 			'delete_failed'        => array( 'error', __( 'Could not delete the subgroup: %s', 'bits-groupsio-sync' ) ),
 			'invalid_request'      => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
 			'not_found'            => array( 'error', __( 'That subgroup could not be found under the configured parent group. It may have already been renamed or deleted.', 'bits-groupsio-sync' ) ),
+			/* translators: %s: number of queued actions processed. */
+			'jobs_processed'       => array( 'success', __( '%s queued action(s) processed.', 'bits-groupsio-sync' ) ),
+			'no_jobs_due'          => array( 'success', __( 'No queued actions were due.', 'bits-groupsio-sync' ) ),
 		);
 	}
 
@@ -110,6 +115,26 @@ final class SubgroupManagementPage {
 			case 'delete':
 				list( $code, $detail ) = self::process_delete();
 				self::redirect_with_notice( self::list_url(), $code, $detail );
+				return;
+			case 'sync':
+				// phpcs:ignore WordPress.Security.NonceVerification.Missing -- this only reads view/subgroup_id to build the redirect target; process_sync() verifies the nonce itself before doing anything else.
+				$sync_view = isset( $_POST['sync_view'] ) ? sanitize_key( wp_unslash( $_POST['sync_view'] ) ) : '';
+				// phpcs:ignore WordPress.Security.NonceVerification.Missing -- see above.
+				$subgroup_id = isset( $_POST['subgroup_id'] ) ? absint( $_POST['subgroup_id'] ) : 0;
+				$count       = self::process_sync();
+
+				$target = self::list_url();
+				if ( self::VIEW_CREATE === $sync_view ) {
+					$target = self::create_url();
+				} elseif ( self::VIEW_DETAILS === $sync_view && 0 !== $subgroup_id ) {
+					$target = self::details_url( $subgroup_id );
+				}
+
+				self::redirect_with_notice(
+					$target,
+					$count > 0 ? 'jobs_processed' : 'no_jobs_due',
+					$count > 0 ? (string) $count : ''
+				);
 				return;
 			default:
 				self::redirect_with_notice( self::list_url(), 'invalid_request' );
@@ -429,6 +454,23 @@ final class SubgroupManagementPage {
 	}
 
 	/**
+	 * The redirect-free half of "Sync" handling: verifies the nonce and
+	 * forces Action Scheduler to process any currently-due queued jobs
+	 * immediately (QueuedExecutionEngine::process_due_jobs()). Not
+	 * scoped to the current view - it processes whatever is globally
+	 * due (today, that's only ever User Assignment's jobs, since this
+	 * page's own create/update/delete actions remain synchronous - see
+	 * the class doc comment).
+	 *
+	 * @return int Number of queued actions processed.
+	 */
+	public static function process_sync(): int {
+		check_admin_referer( self::NONCE_ACTION_SYNC );
+
+		return QueuedExecutionEngine::process_due_jobs();
+	}
+
+	/**
 	 * Renders the List view: subgroup count, the parent group's own
 	 * full address, a link to the Create view, and a plain list of
 	 * subgroup links (one per subgroup, link text = that subgroup's
@@ -444,6 +486,7 @@ final class SubgroupManagementPage {
 	private static function render_list_view(): void {
 		echo '<h1>' . esc_html__( 'Subgroup Management', 'bits-groupsio-sync' ) . '</h1>';
 
+		self::render_sync_button( '' );
 		self::render_notice();
 
 		try {
@@ -567,6 +610,7 @@ final class SubgroupManagementPage {
 	private static function render_create_view(): void {
 		echo '<h1>' . esc_html__( 'Create Subgroup', 'bits-groupsio-sync' ) . '</h1>';
 
+		self::render_sync_button( self::VIEW_CREATE );
 		self::render_notice();
 
 		printf(
@@ -604,6 +648,7 @@ final class SubgroupManagementPage {
 	private static function render_details_view( int $subgroup_id ): void {
 		echo '<h1>' . esc_html__( 'Subgroup Details', 'bits-groupsio-sync' ) . '</h1>';
 
+		self::render_sync_button( self::VIEW_DETAILS, $subgroup_id );
 		self::render_notice();
 
 		printf(
@@ -812,6 +857,32 @@ final class SubgroupManagementPage {
 			esc_html__( 'Shown to members when browsing this subgroup on Groups.io.', 'bits-groupsio-sync' )
 		);
 		echo '</tr></table>';
+	}
+
+	/**
+	 * Renders the "Sync" control: a small nonce-protected POST button
+	 * that forces Action Scheduler to process any currently-due queued
+	 * jobs immediately (QueuedExecutionEngine::process_due_jobs()),
+	 * rather than waiting on WP-Cron's own timing. Not scoped to the
+	 * current view - it processes whatever is globally due; the
+	 * view/subgroup_id are only carried through so the redirect lands
+	 * back on the same view. Per
+	 * subgroup-crud-and-admin-pages-design.md section 8.
+	 *
+	 * @param string $view        Current view ('' for the List view, self::VIEW_CREATE, or self::VIEW_DETAILS).
+	 * @param int    $subgroup_id Current subgroup id, if on the Details view.
+	 * @return void
+	 */
+	private static function render_sync_button( string $view, int $subgroup_id = 0 ): void {
+		echo '<form method="post">';
+		wp_nonce_field( self::NONCE_ACTION_SYNC );
+		echo '<input type="hidden" name="bits_groupsio_action" value="sync" />';
+		printf( '<input type="hidden" name="sync_view" value="%s" />', esc_attr( $view ) );
+		if ( 0 !== $subgroup_id ) {
+			printf( '<input type="hidden" name="subgroup_id" value="%s" />', esc_attr( (string) $subgroup_id ) );
+		}
+		submit_button( __( 'Sync', 'bits-groupsio-sync' ), 'secondary', 'submit', false );
+		echo '</form>';
 	}
 
 	/**
