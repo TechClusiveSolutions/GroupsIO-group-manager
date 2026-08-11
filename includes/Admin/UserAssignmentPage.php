@@ -8,27 +8,276 @@
 namespace BITS\GroupsIOSync\Admin;
 
 use BITS\GroupsIOSync\MemberIndex;
+use BITS\GroupsIOSync\QueuedExecutionEngine;
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
 /**
- * List view only in this pass (#60) - the Details and Add Groups views
- * (#61/#62) are separate units of work, per
- * subgroup-crud-and-admin-pages-design.md section 12. This is the
- * default landing page for the "GroupsIO Management" top-level menu.
+ * List view (#60) and Details view (#61), per
+ * subgroup-crud-and-admin-pages-design.md section 12. The Add Groups
+ * view (#62) is a separate unit of work. This is the default landing
+ * page for the "GroupsIO Management" top-level menu.
  *
- * Read-only: no add/remove/queued actions live on this page (those are
- * on the Details and Add Groups views), so unlike SubgroupManagementPage
- * this class has no POST handling at all - only a GET-based search and
- * pagination.
+ * The List view is read-only (no POST handling). The Details view adds
+ * two state-changing actions: "Remove Selected" (queues a remove job
+ * per checked group, via QueuedExecutionEngine) and "Clear override"
+ * (a synchronous, pure local write via MemberIndex::clear_override() -
+ * no Groups.io call, so it's a nonce-protected GET action link,
+ * matching core's own "Trash" link convention, rather than a full POST
+ * form). Both are handled on this page's own `load-{hook}` action (see
+ * GroupsIoManagementMenu::add_menu_pages()), not inside render() -
+ * WordPress's admin.php already prints the admin header/nav before a
+ * page's own render callback runs, so a wp_safe_redirect() issued from
+ * inside render() on a real submission always fails with "headers
+ * already sent" - load-{hook} fires early, before any output, which is
+ * the standard WordPress hook for exactly this (same pattern
+ * SubgroupManagementPage already uses).
  */
 final class UserAssignmentPage {
 
 	public const SLUG = 'bits-groupsio-user-assignment';
 
+	private const VIEW_DETAILS = 'details';
+
 	private const PER_PAGE = 20;
+
+	/**
+	 * A member realistically belongs to a small handful of groups
+	 * (parent + a few subgroups) - this caps the un-paginated fetch
+	 * process_remove_selected()/process_confirm_parent_remove() use to
+	 * re-validate submitted subgroup ids against the member's own
+	 * indexed rows.
+	 */
+	private const MAX_MEMBER_GROUPS = 500;
+
+	private const NONCE_ACTION_REMOVE_SELECTED       = 'bits_groupsio_remove_selected';
+	private const NONCE_ACTION_CONFIRM_PARENT_REMOVE = 'bits_groupsio_confirm_parent_remove';
+	private const NONCE_ACTION_CLEAR_OVERRIDE        = 'bits_groupsio_clear_override';
+
+	/**
+	 * Returns this page's fixed notice vocabulary as {code: [type,
+	 * translated template]}.
+	 *
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	private static function notices(): array {
+		return array(
+			/* translators: %s: number of group removals queued. */
+			'removed_queued'   => array( 'success', __( '%s group removal(s) queued.', 'bits-groupsio-sync' ) ),
+			'override_cleared' => array( 'success', __( 'Override cleared.', 'bits-groupsio-sync' ) ),
+			'invalid_request'  => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
+		);
+	}
+
+	/**
+	 * Handles this page's own state-changing actions, if any, ending the
+	 * request via redirect + exit. Registered on `load-{$hook_suffix}` by
+	 * GroupsIoManagementMenu. Dispatches POST actions (Remove Selected,
+	 * confirming a parent-group removal) and the one GET action (Clear
+	 * override).
+	 *
+	 * @return void
+	 * @codeCoverageIgnore Dispatch-then-exit wrapper; process_*() below carries the tested logic.
+	 */
+	public static function maybe_handle_post(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		$request_method = isset( $_SERVER['REQUEST_METHOD'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) : '';
+
+		if ( 'POST' === $request_method ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Missing -- this only reads the action name to dispatch; each process_*() method below verifies its own nonce via check_admin_referer() before touching any other POST data or taking action.
+			$action = isset( $_POST['bits_groupsio_action'] ) ? sanitize_key( wp_unslash( $_POST['bits_groupsio_action'] ) ) : '';
+
+			if ( 'remove_selected' === $action ) {
+				$result = self::process_remove_selected();
+
+				if ( $result['invalid'] ) {
+					self::redirect_with_notice( $result['email'], 'invalid_request' );
+					return;
+				}
+
+				$args = array();
+				if ( $result['queued_count'] > 0 ) {
+					$args['bits_notice']        = 'removed_queued';
+					$args['bits_notice_detail'] = (string) $result['queued_count'];
+				}
+				if ( 0 !== $result['parent_id'] ) {
+					$args['confirm_remove_parent'] = $result['parent_id'];
+				}
+				wp_safe_redirect( add_query_arg( $args, self::details_url( $result['email'] ) ) );
+				exit;
+			}
+
+			if ( 'confirm_parent_remove' === $action ) {
+				$result = self::process_confirm_parent_remove();
+				self::redirect_with_notice(
+					$result['email'],
+					$result['invalid'] ? 'invalid_request' : 'removed_queued',
+					$result['invalid'] ? '' : '1'
+				);
+				return;
+			}
+
+			return;
+		}
+
+		// GET-based "Clear override" action link - a nonce-protected GET
+		// request, matching core's own action-link convention (e.g. the
+		// "Trash" links in WP_List_Table), since it's a pure local write
+		// with nothing meaningfully destructive or irreversible enough to
+		// warrant a full POST confirmation form.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- only reads the action name to dispatch; process_clear_override() verifies its own nonce via check_admin_referer() before touching any data.
+		$get_action = isset( $_GET['bits_groupsio_action'] ) ? sanitize_key( wp_unslash( $_GET['bits_groupsio_action'] ) ) : '';
+
+		if ( 'clear_override' === $get_action ) {
+			$result = self::process_clear_override();
+			self::redirect_with_notice( $result['email'], $result['invalid'] ? 'invalid_request' : 'override_cleared' );
+		}
+	}
+
+	/**
+	 * The redirect-free half of "Remove Selected" handling: verifies the
+	 * nonce, re-validates each checked subgroup id against the member's
+	 * own indexed rows (never trusting client-submitted ids blindly),
+	 * and queues an immediate remove job for every checked non-parent
+	 * group. If the parent-group row is among the checked ids, its job
+	 * is deliberately *not* queued here - the caller shows an inline
+	 * confirmation step first (see render_parent_removal_confirmation()),
+	 * per section 12's parent-removal semantics. Kept separate from
+	 * maybe_handle_post() purely so this branch is unit testable without
+	 * terminating the test process.
+	 *
+	 * @return array{queued_count: int, parent_id: int, email: string, invalid: bool}
+	 */
+	public static function process_remove_selected(): array {
+		check_admin_referer( self::NONCE_ACTION_REMOVE_SELECTED );
+
+		$email   = isset( $_POST['member'] ) ? sanitize_email( wp_unslash( $_POST['member'] ) ) : '';
+		$checked = isset( $_POST['subgroup_ids'] ) && is_array( $_POST['subgroup_ids'] )
+			? array_map( 'absint', wp_unslash( $_POST['subgroup_ids'] ) )
+			: array();
+
+		if ( '' === $email || empty( $checked ) ) {
+			return array(
+				'queued_count' => 0,
+				'parent_id'    => 0,
+				'email'        => $email,
+				'invalid'      => true,
+			);
+		}
+
+		$parent_slug   = self::parent_group();
+		$groups        = MemberIndex::get_member_groups( $email, 1, self::MAX_MEMBER_GROUPS );
+		$admin_user_id = get_current_user_id();
+		$queued_count  = 0;
+		$parent_id     = 0;
+
+		foreach ( $groups as $group ) {
+			if ( ! in_array( $group['subgroup_id'], $checked, true ) ) {
+				continue;
+			}
+
+			if ( $parent_slug === $group['subgroup_slug'] ) {
+				$parent_id = $group['subgroup_id'];
+				continue;
+			}
+
+			QueuedExecutionEngine::queue_remove( $email, $group['subgroup_id'], $admin_user_id );
+			++$queued_count;
+		}
+
+		return array(
+			'queued_count' => $queued_count,
+			'parent_id'    => $parent_id,
+			'email'        => $email,
+			'invalid'      => 0 === $queued_count && 0 === $parent_id,
+		);
+	}
+
+	/**
+	 * The redirect-free half of confirming a parent-group removal:
+	 * verifies the nonce, then re-validates the submitted subgroup id is
+	 * both one of this member's own indexed rows and actually the
+	 * parent group (never trusting a client-submitted id blindly) before
+	 * queuing the remove job.
+	 *
+	 * @return array{email: string, invalid: bool}
+	 */
+	public static function process_confirm_parent_remove(): array {
+		check_admin_referer( self::NONCE_ACTION_CONFIRM_PARENT_REMOVE );
+
+		$email       = isset( $_POST['member'] ) ? sanitize_email( wp_unslash( $_POST['member'] ) ) : '';
+		$subgroup_id = isset( $_POST['subgroup_id'] ) ? absint( $_POST['subgroup_id'] ) : 0;
+
+		if ( '' === $email || 0 === $subgroup_id ) {
+			return array(
+				'email'   => $email,
+				'invalid' => true,
+			);
+		}
+
+		$parent_slug = self::parent_group();
+		$groups      = MemberIndex::get_member_groups( $email, 1, self::MAX_MEMBER_GROUPS );
+
+		$is_parent = false;
+		foreach ( $groups as $group ) {
+			if ( $group['subgroup_id'] === $subgroup_id && $group['subgroup_slug'] === $parent_slug ) {
+				$is_parent = true;
+				break;
+			}
+		}
+
+		if ( ! $is_parent ) {
+			return array(
+				'email'   => $email,
+				'invalid' => true,
+			);
+		}
+
+		QueuedExecutionEngine::queue_remove( $email, $subgroup_id, get_current_user_id() );
+
+		return array(
+			'email'   => $email,
+			'invalid' => false,
+		);
+	}
+
+	/**
+	 * The redirect-free half of "Clear override" handling: verifies the
+	 * nonce and, if a member/subgroup id pair was actually supplied,
+	 * clears that row's sticky override flag. Deliberately does not
+	 * re-validate the id against the member's own rows first (unlike the
+	 * two methods above) - clear_override()'s UPDATE ... WHERE already
+	 * only matches an existing (email, subgroup_id) row and is a no-op
+	 * otherwise, so there is no unsafe action to guard against beyond
+	 * the nonce check itself.
+	 *
+	 * @return array{email: string, invalid: bool}
+	 */
+	public static function process_clear_override(): array {
+		check_admin_referer( self::NONCE_ACTION_CLEAR_OVERRIDE );
+
+		$email       = isset( $_GET['member'] ) ? sanitize_email( wp_unslash( $_GET['member'] ) ) : '';
+		$subgroup_id = isset( $_GET['subgroup_id'] ) ? absint( $_GET['subgroup_id'] ) : 0;
+
+		if ( '' === $email || 0 === $subgroup_id ) {
+			return array(
+				'email'   => $email,
+				'invalid' => true,
+			);
+		}
+
+		MemberIndex::clear_override( $email, $subgroup_id );
+
+		return array(
+			'email'   => $email,
+			'invalid' => false,
+		);
+	}
 
 	/**
 	 * Renders the page. Callback for add_menu_page()/add_submenu_page().
@@ -40,10 +289,17 @@ final class UserAssignmentPage {
 			return;
 		}
 
-		echo '<div class="wrap">';
-		echo '<h1>' . esc_html__( 'User Assignment', 'bits-groupsio-sync' ) . '</h1>';
+		$view = isset( $_GET['view'] ) ? sanitize_key( wp_unslash( $_GET['view'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only navigation, no state change.
 
-		self::render_list_view();
+		echo '<div class="wrap">';
+
+		if ( self::VIEW_DETAILS === $view ) {
+			$email = isset( $_GET['member'] ) ? sanitize_email( wp_unslash( $_GET['member'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only navigation, no state change.
+			self::render_details_view( $email );
+		} else {
+			echo '<h1>' . esc_html__( 'User Assignment', 'bits-groupsio-sync' ) . '</h1>';
+			self::render_list_view();
+		}
 
 		echo '</div>';
 	}
@@ -53,9 +309,9 @@ final class UserAssignmentPage {
 	 * List view spec. Search matches against member name/email or
 	 * subgroup name/slug (MemberIndex::search_where() does the actual
 	 * matching); pagination and the search term round-trip through GET
-	 * query args (`s`, `paged`) - this page is read-only, so a GET form
-	 * is correct here (contrast with SubgroupManagementPage's POST
-	 * actions).
+	 * query args (`s`, `paged`) - this view is read-only, so a GET form
+	 * is correct here (contrast with the Details view's POST actions
+	 * below).
 	 *
 	 * @return void
 	 */
@@ -112,8 +368,7 @@ final class UserAssignmentPage {
 	/**
 	 * Renders the member table itself. Each member's name (falling back
 	 * to their email, if no display name is on file) links to the
-	 * Details view (#61) - not yet built in this pass, but the link
-	 * target already matches the URL scheme section 12 specifies for it.
+	 * Details view.
 	 *
 	 * @param array<int, array{email: string, display_name: string, group_count: int}> $members One page of members.
 	 * @return void
@@ -133,14 +388,7 @@ final class UserAssignmentPage {
 				<?php foreach ( $members as $member ) : ?>
 					<?php
 					$display_name = '' !== $member['display_name'] ? $member['display_name'] : $member['email'];
-					$details_url  = add_query_arg(
-						array(
-							'page'   => self::SLUG,
-							'view'   => 'details',
-							'member' => rawurlencode( $member['email'] ),
-						),
-						admin_url( 'admin.php' )
-					);
+					$details_url  = self::details_url( $member['email'] );
 					?>
 					<tr>
 						<td><a href="<?php echo esc_url( $details_url ); ?>"><?php echo esc_html( $display_name ); ?></a></td>
@@ -211,5 +459,454 @@ final class UserAssignmentPage {
 
 		echo '</ul>';
 		echo '</nav>';
+	}
+
+	/**
+	 * Renders the Details view: a paginated, searchable list of one
+	 * member's currently subscribed groups, with a "Remove Selected"
+	 * bulk action, per-row "Clear override" controls, and a link to the
+	 * Add Groups view (#62 - not yet built; the link target already
+	 * matches the URL scheme section 12 specifies for it, mirroring how
+	 * the List view already links ahead to this Details view before #61
+	 * existed).
+	 *
+	 * @param string $email Member's email address, from the `member` query arg.
+	 * @return void
+	 */
+	private static function render_details_view( string $email ): void {
+		echo '<h1>' . esc_html( self::details_heading( $email ) ) . '</h1>';
+
+		printf(
+			'<p><a href="%1$s">%2$s</a></p>',
+			esc_url( self::list_url() ),
+			esc_html__( 'Back to User Assignment', 'bits-groupsio-sync' )
+		);
+
+		self::render_notice();
+
+		if ( '' === $email ) {
+			printf(
+				'<div class="notice notice-error"><p>%s</p></div>',
+				esc_html__( 'No member specified.', 'bits-groupsio-sync' )
+			);
+			return;
+		}
+
+		$search            = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only search/filter, no state change.
+		$paged             = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only navigation, no state change.
+		$confirm_parent_id = isset( $_GET['confirm_remove_parent'] ) ? absint( wp_unslash( $_GET['confirm_remove_parent'] ) ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only display flag, no state change itself; the confirmation form it triggers carries its own nonce.
+
+		// The confirmation button below carries the page's only other
+		// autofocus candidate while it's showing - per the HTML spec,
+		// only the first `autofocus` element in document order actually
+		// receives focus, so having both present at once would silently
+		// defeat the confirmation button's autofocus, same reasoning
+		// SubgroupManagementPage's Details view already documents.
+		self::render_details_search_form( $email, $search, 0 === $confirm_parent_id );
+
+		$total_items = MemberIndex::count_member_groups( $email, $search );
+
+		if ( 0 === $total_items ) {
+			echo '<p>' . esc_html__( 'No currently subscribed groups found.', 'bits-groupsio-sync' ) . '</p>';
+			return;
+		}
+
+		$total_pages = (int) ceil( $total_items / self::PER_PAGE );
+		$paged       = min( $paged, $total_pages );
+		$groups      = MemberIndex::get_member_groups( $email, $paged, self::PER_PAGE, $search );
+
+		self::render_group_table( $email, $groups, $confirm_parent_id );
+		self::render_details_pagination( $email, $paged, $total_pages, $search );
+
+		printf(
+			'<p><a href="%1$s">%2$s</a></p>',
+			esc_url( self::add_groups_url( $email ) ),
+			esc_html__( 'Add groups', 'bits-groupsio-sync' )
+		);
+	}
+
+	/**
+	 * Builds the Details view's heading, preferring the member's stored
+	 * display name and falling back to their email, matching the List
+	 * view's own fallback convention.
+	 *
+	 * @param string $email Member's email address.
+	 * @return string
+	 */
+	private static function details_heading( string $email ): string {
+		if ( '' === $email ) {
+			return __( 'User Assignment: Details', 'bits-groupsio-sync' );
+		}
+
+		$display_name = MemberIndex::get_display_name( $email );
+
+		return sprintf(
+			/* translators: %s: member's display name or email address. */
+			__( 'User Assignment: %s', 'bits-groupsio-sync' ),
+			'' !== $display_name ? $display_name : $email
+		);
+	}
+
+	/**
+	 * Renders the Details view's search box + button, filtering this
+	 * member's own group list by subgroup name or title.
+	 *
+	 * @param string $email     Member's email address, round-tripped as a hidden field.
+	 * @param string $search    Current search term, if any, for re-display.
+	 * @param bool   $autofocus Whether the search field should carry autofocus (suppressed while the parent-removal confirmation is showing).
+	 * @return void
+	 */
+	private static function render_details_search_form( string $email, string $search, bool $autofocus ): void {
+		?>
+		<form method="get" action="<?php echo esc_url( admin_url( 'admin.php' ) ); ?>" role="search">
+			<input type="hidden" name="page" value="<?php echo esc_attr( self::SLUG ); ?>" />
+			<input type="hidden" name="view" value="<?php echo esc_attr( self::VIEW_DETAILS ); ?>" />
+			<input type="hidden" name="member" value="<?php echo esc_attr( $email ); ?>" />
+			<label for="bits-groupsio-member-group-search"><?php esc_html_e( "Search this member's groups", 'bits-groupsio-sync' ); ?></label>
+			<input
+				type="search"
+				id="bits-groupsio-member-group-search"
+				name="s"
+				value="<?php echo esc_attr( $search ); ?>"
+				<?php echo $autofocus ? 'autofocus' : ''; ?>
+			/>
+			<button type="submit" class="button"><?php esc_html_e( 'Search', 'bits-groupsio-sync' ); ?></button>
+		</form>
+		<?php
+	}
+
+	/**
+	 * Renders the member's group table (with checkboxes and the "Remove
+	 * Selected" bulk action) and, when a parent-group removal is
+	 * pending confirmation, the inline confirmation step below it.
+	 *
+	 * @param string                                                                                                                               $email             Member's email address.
+	 * @param array<int, array{subgroup_id: int, subgroup_slug: string, subgroup_title: string, pmpro_expected: bool, override_type: string|null}> $groups            One page of this member's groups.
+	 * @param int                                                                                                                                  $confirm_parent_id Numeric subgroup id of a pending parent-removal confirmation, or 0 if none.
+	 * @return void
+	 */
+	private static function render_group_table( string $email, array $groups, int $confirm_parent_id ): void {
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin.php' ) ) . '">';
+		wp_nonce_field( self::NONCE_ACTION_REMOVE_SELECTED );
+		echo '<input type="hidden" name="bits_groupsio_action" value="remove_selected" />';
+		printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $email ) );
+
+		echo '<table class="wp-list-table widefat fixed striped">';
+		echo '<caption class="screen-reader-text">' . esc_html__( "This member's current subscribed groups", 'bits-groupsio-sync' ) . '</caption>';
+		echo '<thead><tr>';
+		echo '<th scope="col" class="check-column"><span class="screen-reader-text">' . esc_html__( 'Select', 'bits-groupsio-sync' ) . '</span></th>';
+		echo '<th scope="col">' . esc_html__( 'Group', 'bits-groupsio-sync' ) . '</th>';
+		echo '<th scope="col">' . esc_html__( 'PMPro expected', 'bits-groupsio-sync' ) . '</th>';
+		echo '<th scope="col">' . esc_html__( 'Override', 'bits-groupsio-sync' ) . '</th>';
+		echo '<th scope="col"><span class="screen-reader-text">' . esc_html__( 'Actions', 'bits-groupsio-sync' ) . '</span></th>';
+		echo '</tr></thead><tbody>';
+
+		foreach ( $groups as $group ) {
+			self::render_group_row( $email, $group );
+		}
+
+		echo '</tbody></table>';
+
+		submit_button( __( 'Remove Selected', 'bits-groupsio-sync' ) );
+		echo '</form>';
+
+		if ( 0 !== $confirm_parent_id ) {
+			self::render_parent_removal_confirmation( $email, $confirm_parent_id );
+		}
+	}
+
+	/**
+	 * Renders one row of the group table.
+	 *
+	 * @param string                                                                                                                   $email Member's email address.
+	 * @param array{subgroup_id: int, subgroup_slug: string, subgroup_title: string, pmpro_expected: bool, override_type: string|null} $group One group row.
+	 * @return void
+	 */
+	private static function render_group_row( string $email, array $group ): void {
+		$checkbox_id = 'bits-groupsio-group-' . $group['subgroup_id'];
+		$label       = sprintf(
+			/* translators: 1: group title, 2: group slug/namespace. */
+			__( '%1$s (%2$s)', 'bits-groupsio-sync' ),
+			'' !== $group['subgroup_title'] ? $group['subgroup_title'] : $group['subgroup_slug'],
+			$group['subgroup_slug']
+		);
+
+		echo '<tr>';
+		printf(
+			'<td><input type="checkbox" id="%1$s" name="subgroup_ids[]" value="%2$s" /><label for="%1$s" class="screen-reader-text">%3$s</label></td>',
+			esc_attr( $checkbox_id ),
+			esc_attr( (string) $group['subgroup_id'] ),
+			esc_html(
+				sprintf(
+					/* translators: %s: group label ("Title (namespace)"). */
+					__( 'Select %s', 'bits-groupsio-sync' ),
+					$label
+				)
+			)
+		);
+		echo '<td>' . esc_html( $label ) . '</td>';
+		echo '<td>' . esc_html( $group['pmpro_expected'] ? __( 'Yes', 'bits-groupsio-sync' ) : __( 'No', 'bits-groupsio-sync' ) ) . '</td>';
+		echo '<td>' . esc_html( self::override_label( $group['override_type'] ) ) . '</td>';
+		echo '<td>';
+		if ( null !== $group['override_type'] ) {
+			self::render_clear_override_link( $email, $group['subgroup_id'], $label );
+		}
+		echo '</td>';
+		echo '</tr>';
+	}
+
+	/**
+	 * Renders one row's "Clear override" action link: a nonce-protected
+	 * GET link (see maybe_handle_post()'s doc comment for why this is a
+	 * link, not a form).
+	 *
+	 * @param string $email       Member's email address.
+	 * @param int    $subgroup_id Numeric Groups.io group/subgroup id for this row.
+	 * @param string $label       This row's "Title (namespace)" label, for the link's accessible name.
+	 * @return void
+	 */
+	private static function render_clear_override_link( string $email, int $subgroup_id, string $label ): void {
+		$url = wp_nonce_url(
+			add_query_arg(
+				array(
+					'page'                 => self::SLUG,
+					'view'                 => self::VIEW_DETAILS,
+					'member'               => rawurlencode( $email ),
+					'bits_groupsio_action' => 'clear_override',
+					'subgroup_id'          => $subgroup_id,
+				),
+				admin_url( 'admin.php' )
+			),
+			self::NONCE_ACTION_CLEAR_OVERRIDE
+		);
+
+		printf(
+			'<a href="%1$s">%2$s<span class="screen-reader-text"> %3$s</span></a>',
+			esc_url( $url ),
+			esc_html__( 'Clear override', 'bits-groupsio-sync' ),
+			esc_html(
+				sprintf(
+					/* translators: %s: group label ("Title (namespace)"). */
+					__( 'for %s', 'bits-groupsio-sync' ),
+					$label
+				)
+			)
+		);
+	}
+
+	/**
+	 * Formats a row's override_type as text, per section 12's
+	 * requirement that override state never be conveyed by color alone.
+	 * 'removed' cannot actually occur here - get_member_groups() already
+	 * excludes those rows - but is handled defensively rather than
+	 * assumed unreachable.
+	 *
+	 * @param string|null $override_type Row's override_type column value.
+	 * @return string
+	 */
+	private static function override_label( ?string $override_type ): string {
+		if ( 'added' === $override_type ) {
+			return __( 'Manually added', 'bits-groupsio-sync' );
+		}
+		if ( 'removed' === $override_type ) {
+			return __( 'Manually removed', 'bits-groupsio-sync' );
+		}
+		return __( 'None', 'bits-groupsio-sync' );
+	}
+
+	/**
+	 * Renders the inline parent-group removal confirmation step, shown
+	 * when the `confirm_remove_parent` query arg carries a pending
+	 * subgroup id (set by process_remove_selected()'s redirect). Mirrors
+	 * SubgroupManagementPage's inline delete confirmation.
+	 *
+	 * @param string $email     Member's email address.
+	 * @param int    $parent_id Numeric subgroup id of the parent group pending confirmation.
+	 * @return void
+	 */
+	private static function render_parent_removal_confirmation( string $email, int $parent_id ): void {
+		echo '<div class="notice notice-warning">';
+		echo '<p>' . esc_html__( "Removing the parent group removes this member from all of BITS' Groups.io presence, not just one list. Are you sure?", 'bits-groupsio-sync' ) . '</p>';
+
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin.php' ) ) . '">';
+		wp_nonce_field( self::NONCE_ACTION_CONFIRM_PARENT_REMOVE );
+		echo '<input type="hidden" name="bits_groupsio_action" value="confirm_parent_remove" />';
+		printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $email ) );
+		printf( '<input type="hidden" name="subgroup_id" value="%s" />', esc_attr( (string) $parent_id ) );
+		submit_button( __( 'Yes, remove from the parent group', 'bits-groupsio-sync' ), 'primary delete', 'submit', false, array( 'autofocus' => 'autofocus' ) );
+		echo ' ';
+		printf(
+			'<a class="button" href="%s">%s</a>',
+			esc_url( self::details_url( $email ) ),
+			esc_html__( 'Cancel', 'bits-groupsio-sync' )
+		);
+		echo '</form></div>';
+	}
+
+	/**
+	 * Renders the Details view's pagination controls, preserving the
+	 * current member and search term across page links.
+	 *
+	 * @param string $email        Member's email address.
+	 * @param int    $current_page Current 1-based page number.
+	 * @param int    $total_pages  Total number of pages.
+	 * @param string $search       Current search term, if any, to preserve across page links.
+	 * @return void
+	 */
+	private static function render_details_pagination( string $email, int $current_page, int $total_pages, string $search ): void {
+		if ( $total_pages <= 1 ) {
+			return;
+		}
+
+		echo '<nav aria-label="' . esc_attr__( 'Groups pagination', 'bits-groupsio-sync' ) . '">';
+		echo '<ul class="bits-groupsio-pagination">';
+
+		for ( $page = 1; $page <= $total_pages; $page++ ) {
+			$args = array(
+				'page'   => self::SLUG,
+				'view'   => self::VIEW_DETAILS,
+				'member' => rawurlencode( $email ),
+				'paged'  => $page,
+			);
+			if ( '' !== $search ) {
+				$args['s'] = $search;
+			}
+			$url = add_query_arg( $args, admin_url( 'admin.php' ) );
+
+			echo '<li>';
+			if ( $page === $current_page ) {
+				printf(
+					'<span aria-current="page">%s</span>',
+					esc_html(
+						sprintf(
+							/* translators: %d: page number. */
+							__( 'Page %d', 'bits-groupsio-sync' ),
+							$page
+						)
+					)
+				);
+			} else {
+				printf(
+					'<a href="%s">%s</a>',
+					esc_url( $url ),
+					esc_html(
+						sprintf(
+							/* translators: %d: page number. */
+							__( 'Page %d', 'bits-groupsio-sync' ),
+							$page
+						)
+					)
+				);
+			}
+			echo '</li>';
+		}
+
+		echo '</ul>';
+		echo '</nav>';
+	}
+
+	/**
+	 * Renders a fixed-vocabulary notice banner from the `bits_notice`
+	 * (and optional `bits_notice_detail`) query args, if present.
+	 * Mirrors SubgroupManagementPage's own render_notice().
+	 *
+	 * @return void
+	 */
+	private static function render_notice(): void {
+		$code = isset( $_GET['bits_notice'] ) ? sanitize_key( wp_unslash( $_GET['bits_notice'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only display of a fixed-vocabulary code, no state change.
+
+		$notices = self::notices();
+
+		if ( '' === $code || ! isset( $notices[ $code ] ) ) {
+			return;
+		}
+
+		list( $type, $template ) = $notices[ $code ];
+
+		$message = $template;
+		if ( false !== strpos( $template, '%s' ) ) {
+			$detail  = isset( $_GET['bits_notice_detail'] ) ? sanitize_text_field( wp_unslash( $_GET['bits_notice_detail'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only display, no state change.
+			$message = sprintf( $template, $detail );
+		}
+
+		printf(
+			'<div class="notice notice-%1$s"><p>%2$s</p></div>',
+			esc_attr( 'success' === $type ? 'success' : 'error' ),
+			esc_html( $message )
+		);
+	}
+
+	/**
+	 * Redirects to the Details view for one member with a fixed-vocabulary
+	 * notice code and exits.
+	 *
+	 * @param string $email  Member's email address.
+	 * @param string $code   One of the keys in self::notices().
+	 * @param string $detail Optional detail to interpolate into the notice template.
+	 * @return void
+	 * @codeCoverageIgnore Calls exit; cannot run inside the test process. Its pure input-building logic is trivial (array literal + add_query_arg).
+	 */
+	private static function redirect_with_notice( string $email, string $code, string $detail = '' ): void {
+		$args = array( 'bits_notice' => $code );
+
+		if ( '' !== $detail ) {
+			$args['bits_notice_detail'] = $detail;
+		}
+
+		wp_safe_redirect( add_query_arg( $args, self::details_url( $email ) ) );
+		exit;
+	}
+
+	/**
+	 * Builds the List view's URL.
+	 *
+	 * @return string
+	 */
+	private static function list_url(): string {
+		return add_query_arg( array( 'page' => self::SLUG ), admin_url( 'admin.php' ) );
+	}
+
+	/**
+	 * Builds a member's Details view URL.
+	 *
+	 * @param string $email Member's email address.
+	 * @return string
+	 */
+	private static function details_url( string $email ): string {
+		return add_query_arg(
+			array(
+				'page'   => self::SLUG,
+				'view'   => self::VIEW_DETAILS,
+				'member' => rawurlencode( $email ),
+			),
+			admin_url( 'admin.php' )
+		);
+	}
+
+	/**
+	 * Builds a member's Add Groups view URL (#62 - not yet built; see
+	 * the class doc comment).
+	 *
+	 * @param string $email Member's email address.
+	 * @return string
+	 */
+	private static function add_groups_url( string $email ): string {
+		return add_query_arg(
+			array(
+				'page'   => self::SLUG,
+				'view'   => 'add-groups',
+				'member' => rawurlencode( $email ),
+			),
+			admin_url( 'admin.php' )
+		);
+	}
+
+	/**
+	 * Reads the configured parent group slug.
+	 *
+	 * @return string
+	 */
+	private static function parent_group(): string {
+		return defined( 'GROUPS_IO_PARENT_GROUP' ) ? GROUPS_IO_PARENT_GROUP : '';
 	}
 }

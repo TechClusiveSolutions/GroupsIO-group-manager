@@ -434,4 +434,97 @@ final class MemberIndexTest extends WP_UnitTestCase {
 		$this->assertCount( 1, $page_three );
 		$this->assertNotSame( $page_one[0]['email'], $page_two[0]['email'] );
 	}
+
+	public function test_get_display_name_returns_stored_value(): void {
+		MemberIndex::apply_add( 0, 'named@example.test', 'Named Member', 1, 'perception-is-all', '', 1 );
+
+		$this->assertSame( 'Named Member', MemberIndex::get_display_name( 'named@example.test' ) );
+	}
+
+	public function test_get_display_name_returns_empty_string_when_no_row_exists(): void {
+		$this->assertSame( '', MemberIndex::get_display_name( 'nobody@example.test' ) );
+	}
+
+	public function test_get_member_groups_returns_this_members_rows_only(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		MemberIndex::apply_add( 0, 'bob@example.test', 'Bob', 1, 'perception-is-all', '', 1 );
+
+		$rows = MemberIndex::get_member_groups( 'alice@example.test', 1, 20 );
+
+		$this->assertCount( 2, $rows );
+		$slugs = array_column( $rows, 'subgroup_slug' );
+		$this->assertContains( 'perception-is-all', $slugs );
+		$this->assertContains( 'perception-is-all+announcements', $slugs );
+	}
+
+	public function test_get_member_groups_excludes_rows_with_removed_override(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		MemberIndex::apply_remove( 'alice@example.test', 2, 1 );
+
+		$rows = MemberIndex::get_member_groups( 'alice@example.test', 1, 20 );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'perception-is-all', $rows[0]['subgroup_slug'] );
+	}
+
+	public function test_get_member_groups_search_matches_subgroup_slug_or_title(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', 'Perception Is All', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+
+		$rows = MemberIndex::get_member_groups( 'alice@example.test', 1, 20, 'announcements' );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'perception-is-all+announcements', $rows[0]['subgroup_slug'] );
+	}
+
+	public function test_get_member_groups_reports_pmpro_expected_and_override_type(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+
+		$rows = MemberIndex::get_member_groups( 'alice@example.test', 1, 20 );
+
+		$this->assertTrue( $rows[0]['pmpro_expected'], 'The parent group is always PMPro-expected.' );
+		$this->assertSame( 'added', $rows[0]['override_type'] );
+	}
+
+	public function test_get_member_groups_respects_page_and_per_page(): void {
+		for ( $i = 1; $i <= 5; $i++ ) {
+			MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', $i, "perception-is-all+list{$i}", "List {$i}", 1 );
+		}
+
+		$page_one = MemberIndex::get_member_groups( 'alice@example.test', 1, 2 );
+		$page_two = MemberIndex::get_member_groups( 'alice@example.test', 2, 2 );
+
+		$this->assertCount( 2, $page_one );
+		$this->assertCount( 2, $page_two );
+		$this->assertNotSame( $page_one[0]['subgroup_id'], $page_two[0]['subgroup_id'] );
+	}
+
+	public function test_count_member_groups_excludes_removed_override_rows(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', '', 1 );
+		MemberIndex::apply_remove( 'alice@example.test', 2, 1 );
+
+		$this->assertSame( 1, MemberIndex::count_member_groups( 'alice@example.test' ) );
+	}
+
+	public function test_count_member_groups_with_search(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', '', 1 );
+
+		$this->assertSame( 1, MemberIndex::count_member_groups( 'alice@example.test', 'announcements' ) );
+	}
+
+	public function test_clear_override_removes_the_flag_from_a_single_row(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', '', 1 );
+
+		MemberIndex::clear_override( 'alice@example.test', 2 );
+
+		$cleared   = $this->fetch_row( 'alice@example.test', 2 );
+		$untouched = $this->fetch_row( 'alice@example.test', 1 );
+		$this->assertNull( $cleared['override_type'] );
+		$this->assertSame( 'added', $untouched['override_type'], 'clear_override() must only touch the one targeted row.' );
+	}
 }

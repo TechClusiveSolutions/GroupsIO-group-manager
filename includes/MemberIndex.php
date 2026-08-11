@@ -398,6 +398,37 @@ final class MemberIndex {
 	}
 
 	/**
+	 * Clears the sticky manual-override flag for a single (email,
+	 * subgroup) row - the single-row counterpart to
+	 * clear_overrides_for_user() below, which clears every row for a
+	 * user on a PMPro level change. Used by the User Assignment Details
+	 * view's synchronous "Clear override" control: a pure local write
+	 * with no Groups.io API call and nothing meaningfully to retry, per
+	 * subgroup-crud-and-admin-pages-design.md section 12.
+	 *
+	 * @param string $email       Member's email address.
+	 * @param int    $subgroup_id Numeric Groups.io group/subgroup id.
+	 * @return void
+	 */
+	public static function clear_override( string $email, int $subgroup_id ): void {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- this table isn't object-cached, matching AuditLog's own uncached direct-write convention.
+		$wpdb->update(
+			self::table_name(),
+			array(
+				'override_type' => null,
+				'override_by'   => null,
+				'override_at'   => null,
+			),
+			array(
+				'email'       => $email,
+				'subgroup_id' => $subgroup_id,
+			)
+		);
+	}
+
+	/**
 	 * Clears the sticky manual-override flag for every row belonging to
 	 * a member whose PMPro level just changed - a fresh join/upgrade/
 	 * downgrade supersedes a stale manual override. Bound to
@@ -446,6 +477,142 @@ final class MemberIndex {
 		);
 
 		return null === $value ? null : (int) $value;
+	}
+
+	/**
+	 * Reads the display name stored for one member (the MAX() across
+	 * their rows, matching get_members_page()'s own aggregation, since
+	 * every row for one email carries the same display_name from the
+	 * last sync() run). Returns '' if no row exists yet or none carries
+	 * a display name.
+	 *
+	 * @param string $email Member's email address.
+	 * @return string
+	 */
+	public static function get_display_name( string $email ): string {
+		global $wpdb;
+
+		$table = self::table_name();
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is our own fixed table name, not user input.
+		$value = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT MAX(display_name) FROM $table WHERE email = %s",
+				$email
+			)
+		);
+		// phpcs:enable
+
+		return null === $value ? '' : (string) $value;
+	}
+
+	/**
+	 * Returns one page of a single member's currently subscribed groups
+	 * (parent + subgroups), for the User Assignment Details view, per
+	 * subgroup-crud-and-admin-pages-design.md section 12. Excludes any
+	 * row carrying override_type = 'removed' - an explicitly-removed row
+	 * no longer counts as "currently subscribed" even before the next
+	 * hourly sync corrects it, since a member an admin just removed
+	 * shouldn't still appear as subscribed on this same page. A search
+	 * term matches subgroup_slug/subgroup_title, the same convention the
+	 * List view's subgroup-name matching uses.
+	 *
+	 * @param string $email    Member's email address.
+	 * @param int    $page     1-based page number.
+	 * @param int    $per_page Rows per page.
+	 * @param string $search   Optional search term.
+	 * @return array<int, array{subgroup_id: int, subgroup_slug: string, subgroup_title: string, pmpro_expected: bool, override_type: string|null}>
+	 */
+	public static function get_member_groups( string $email, int $page, int $per_page, string $search = '' ): array {
+		global $wpdb;
+
+		$table  = self::table_name();
+		$offset = max( 0, ( max( 1, $page ) - 1 ) * $per_page );
+
+		list( $where_sql, $params ) = self::member_groups_where( $email, $search );
+
+		$params[] = $per_page;
+		$params[] = $offset;
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- $table is our own fixed table name; $where_sql is a fixed fragment built by member_groups_where() containing only placeholders, filled via $params below.
+		$sql = $wpdb->prepare(
+			"SELECT subgroup_id, subgroup_slug, subgroup_title, pmpro_expected, override_type
+			FROM $table
+			WHERE $where_sql
+			ORDER BY subgroup_title ASC, subgroup_slug ASC
+			LIMIT %d OFFSET %d",
+			$params
+		);
+		// phpcs:enable
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $sql was already built via $wpdb->prepare() above.
+		$rows = $wpdb->get_results( $sql, ARRAY_A );
+
+		return array_map(
+			static function ( array $row ): array {
+				return array(
+					'subgroup_id'    => (int) $row['subgroup_id'],
+					'subgroup_slug'  => (string) $row['subgroup_slug'],
+					'subgroup_title' => (string) $row['subgroup_title'],
+					'pmpro_expected' => (bool) $row['pmpro_expected'],
+					'override_type'  => null === $row['override_type'] ? null : (string) $row['override_type'],
+				);
+			},
+			(array) $rows
+		);
+	}
+
+	/**
+	 * Total number of a single member's currently subscribed groups,
+	 * optionally filtered by a search term - see get_member_groups()
+	 * above for the shared exclusion/search semantics.
+	 *
+	 * @param string $email  Member's email address.
+	 * @param string $search Optional search term.
+	 * @return int
+	 */
+	public static function count_member_groups( string $email, string $search = '' ): int {
+		global $wpdb;
+
+		$table = self::table_name();
+
+		list( $where_sql, $params ) = self::member_groups_where( $email, $search );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- $table is our own fixed table name; $where_sql is a fixed fragment built by member_groups_where() containing only placeholders, filled via $params below.
+		$sql = $wpdb->prepare(
+			"SELECT COUNT(*) FROM $table WHERE $where_sql",
+			$params
+		);
+		// phpcs:enable
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $sql was already built via $wpdb->prepare() above.
+		return (int) $wpdb->get_var( $sql );
+	}
+
+	/**
+	 * Builds the shared WHERE fragment (with %s/%d placeholders) for
+	 * get_member_groups()/count_member_groups() above: one member's rows,
+	 * excluding any 'removed' override, optionally further filtered by a
+	 * subgroup slug/title search term.
+	 *
+	 * @param string $email  Member's email address.
+	 * @param string $search Optional search term.
+	 * @return array{0: string, 1: array<int, string>} WHERE SQL fragment and its placeholder values, in order.
+	 */
+	private static function member_groups_where( string $email, string $search ): array {
+		global $wpdb;
+
+		$where  = "email = %s AND ( override_type IS NULL OR override_type != 'removed' )";
+		$params = array( $email );
+
+		if ( '' !== $search ) {
+			$like     = '%' . $wpdb->esc_like( $search ) . '%';
+			$where   .= ' AND ( subgroup_slug LIKE %s OR subgroup_title LIKE %s )';
+			$params[] = $like;
+			$params[] = $like;
+		}
+
+		return array( $where, $params );
 	}
 
 	/**
