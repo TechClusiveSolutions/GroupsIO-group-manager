@@ -56,7 +56,7 @@ final class GroupsIoManagementMenu {
 			'dashicons-groups'
 		);
 
-		add_submenu_page(
+		$user_assignment_hook = add_submenu_page(
 			self::SLUG_USER_ASSIGNMENT,
 			__( 'User Assignment', 'bits-groupsio-sync' ),
 			__( 'User Assignment', 'bits-groupsio-sync' ),
@@ -64,6 +64,15 @@ final class GroupsIoManagementMenu {
 			self::SLUG_USER_ASSIGNMENT,
 			array( UserAssignmentPage::class, 'render' )
 		);
+
+		// UserAssignmentPage handles its Details-view state-changing
+		// actions (Remove Selected, confirming a parent-group removal, and
+		// the Clear-override GET link) on load-{$hook_suffix} rather than
+		// inside render(), for the same "headers already sent" reason
+		// SubgroupManagementPage's own load-hook registration below does.
+		if ( false !== $user_assignment_hook ) {
+			add_action( "load-{$user_assignment_hook}", array( UserAssignmentPage::class, 'maybe_handle_post' ) );
+		}
 
 		add_submenu_page(
 			self::SLUG_USER_ASSIGNMENT,

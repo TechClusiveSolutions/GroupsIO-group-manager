@@ -7,14 +7,17 @@ use BITS\GroupsIOSync\MemberIndex;
 use WP_UnitTestCase;
 
 /**
- * Covers UserAssignmentPage's List view (#60) - the only view built in
- * this pass, per subgroup-crud-and-admin-pages-design.md section 12.
- * Seeds MemberIndex rows directly via apply_add() (the same seeding
- * approach MemberIndexTest uses elsewhere) rather than mocking
+ * Covers UserAssignmentPage's List view (#60) and Details view (#61),
+ * per subgroup-crud-and-admin-pages-design.md section 12. Seeds
+ * MemberIndex rows directly via apply_add()/apply_remove() (the same
+ * seeding approach MemberIndexTest uses elsewhere) rather than mocking
  * Groups.io HTTP responses, since this page only ever reads the local
- * index - it never calls GroupsIoApiClient itself.
+ * index and queues jobs via QueuedExecutionEngine - it never calls
+ * GroupsIoApiClient itself.
  */
 final class UserAssignmentPageTest extends WP_UnitTestCase {
+
+	private const HOOK = 'bits_groupsio_execute_queued_action';
 
 	public function set_up(): void {
 		parent::set_up();
@@ -36,11 +39,13 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 
 		set_current_screen( 'dashboard' );
 
-		$_GET = array();
+		$_GET  = array();
+		$_POST = array();
 	}
 
 	public function tear_down(): void {
-		$_GET = array();
+		$_GET  = array();
+		$_POST = array();
 
 		parent::tear_down();
 	}
@@ -204,5 +209,240 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 
 		$this->assertStringContainsString( 'member21@example.test', $page_two );
 		$this->assertStringNotContainsString( 'member01@example.test', $page_two );
+	}
+
+	public function test_details_view_renders_no_groups_message_when_member_has_no_groups(): void {
+		$_GET['view']   = 'details';
+		$_GET['member'] = 'nobody@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'No currently subscribed groups found.', $output );
+	}
+
+	public function test_details_view_renders_group_row_with_title_and_namespace(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+
+		$_GET['view']   = 'details';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'Announcements (perception-is-all+announcements)', $output );
+	}
+
+	public function test_details_view_shows_pmpro_expected_and_override_state_as_text(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$_GET['view']   = 'details';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'Manually added', $output, 'apply_add() sets the "added" override flag, which must be shown as text.' );
+		$this->assertStringContainsString( '<td>Yes</td>', $output, 'The parent group is always PMPro-expected.' );
+	}
+
+	public function test_details_view_search_filters_by_subgroup_name_or_title(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+
+		$_GET['view']   = 'details';
+		$_GET['member'] = 'target@example.test';
+		$_GET['s']      = 'announcements';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'Announcements', $output );
+		$this->assertStringNotContainsString( 'perception-is-all (perception-is-all)', $output );
+	}
+
+	public function test_details_view_pagination_navigates_to_the_correct_subsequent_page(): void {
+		// PER_PAGE is 20 - seed 21 groups (padded titles so alphabetic sort matches numeric order).
+		for ( $i = 1; $i <= 21; $i++ ) {
+			MemberIndex::apply_add( 0, 'target@example.test', 'Target', $i, "perception-is-all+list{$i}", sprintf( 'List %02d', $i ), 1 );
+		}
+
+		$_GET['view']   = 'details';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$page_one = ob_get_clean();
+
+		$this->assertStringContainsString( 'Groups pagination', $page_one );
+		$this->assertStringNotContainsString( 'List 21', $page_one );
+
+		$_GET['paged'] = '2';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$page_two = ob_get_clean();
+
+		$this->assertStringContainsString( 'List 21', $page_two );
+		$this->assertStringNotContainsString( 'List 01', $page_two );
+	}
+
+	public function test_details_view_links_to_the_add_groups_view_url_scheme(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$_GET['view']   = 'details';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'view=add-groups', $output );
+		$this->assertStringContainsString( 'member=target%40example.test', $output );
+	}
+
+	public function test_details_view_shows_clear_override_link_only_for_overridden_rows(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$_GET['view']   = 'details';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'Clear override', $output );
+		$this->assertStringContainsString( 'bits_groupsio_action=clear_override', $output );
+	}
+
+	public function test_details_view_shows_parent_removal_confirmation_when_query_arg_present(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$_GET['view']                  = 'details';
+		$_GET['member']                = 'target@example.test';
+		$_GET['confirm_remove_parent'] = '1';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( "Removing the parent group removes this member from all of BITS", $output );
+		$this->assertStringContainsString( 'confirm_parent_remove', $output );
+	}
+
+	public function test_process_remove_selected_queues_a_job_per_checked_non_parent_group(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 3, 'perception-is-all+sustaining', 'Sustaining', 1 );
+
+		$_POST['member']       = 'target@example.test';
+		$_POST['subgroup_ids'] = array( '2', '3' );
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_remove_selected' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_remove_selected();
+
+		unset( $_POST['member'], $_POST['subgroup_ids'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertFalse( $result['invalid'] );
+		$this->assertSame( 2, $result['queued_count'] );
+		$this->assertSame( 0, $result['parent_id'] );
+		$this->assertNotFalse( as_next_scheduled_action( self::HOOK ) );
+	}
+
+	public function test_process_remove_selected_defers_the_parent_row_pending_confirmation(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+
+		$_POST['member']       = 'target@example.test';
+		$_POST['subgroup_ids'] = array( '1', '2' );
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_remove_selected' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_remove_selected();
+
+		unset( $_POST['member'], $_POST['subgroup_ids'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertFalse( $result['invalid'] );
+		$this->assertSame( 1, $result['queued_count'], 'The non-parent row still queues immediately.' );
+		$this->assertSame( 1, $result['parent_id'], 'The parent row is deferred, not queued, pending confirmation.' );
+	}
+
+	public function test_process_remove_selected_is_invalid_when_nothing_checked(): void {
+		$_POST['member']       = 'target@example.test';
+		$_POST['subgroup_ids'] = array();
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_remove_selected' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_remove_selected();
+
+		unset( $_POST['member'], $_POST['subgroup_ids'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertTrue( $result['invalid'] );
+	}
+
+	public function test_process_confirm_parent_remove_queues_the_parent_removal(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$_POST['member']      = 'target@example.test';
+		$_POST['subgroup_id'] = '1';
+		$_POST['_wpnonce']    = wp_create_nonce( 'bits_groupsio_confirm_parent_remove' );
+		$_REQUEST['_wpnonce'] = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_confirm_parent_remove();
+
+		unset( $_POST['member'], $_POST['subgroup_id'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertFalse( $result['invalid'] );
+		$this->assertNotFalse( as_next_scheduled_action( self::HOOK ) );
+	}
+
+	public function test_process_confirm_parent_remove_rejects_a_non_parent_subgroup_id(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+
+		$_POST['member']      = 'target@example.test';
+		$_POST['subgroup_id'] = '2';
+		$_POST['_wpnonce']    = wp_create_nonce( 'bits_groupsio_confirm_parent_remove' );
+		$_REQUEST['_wpnonce'] = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_confirm_parent_remove();
+
+		unset( $_POST['member'], $_POST['subgroup_id'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertTrue( $result['invalid'], 'A non-parent subgroup id must never be accepted by this action.' );
+		$this->assertFalse( as_next_scheduled_action( self::HOOK ) );
+	}
+
+	public function test_process_clear_override_clears_the_flag(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+
+		$_GET['member']       = 'target@example.test';
+		$_GET['subgroup_id']  = '2';
+		$_GET['_wpnonce']     = wp_create_nonce( 'bits_groupsio_clear_override' );
+		$_REQUEST['_wpnonce'] = $_GET['_wpnonce'];
+
+		$result = UserAssignmentPage::process_clear_override();
+
+		unset( $_GET['member'], $_GET['subgroup_id'], $_GET['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertFalse( $result['invalid'] );
+		$rows = MemberIndex::get_member_groups( 'target@example.test', 1, 20 );
+		$this->assertNull( $rows[0]['override_type'] );
+	}
+
+	public function test_process_clear_override_is_invalid_without_required_fields(): void {
+		$_GET['_wpnonce']     = wp_create_nonce( 'bits_groupsio_clear_override' );
+		$_REQUEST['_wpnonce'] = $_GET['_wpnonce'];
+
+		$result = UserAssignmentPage::process_clear_override();
+
+		unset( $_GET['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertTrue( $result['invalid'] );
 	}
 }
