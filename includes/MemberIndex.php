@@ -616,6 +616,119 @@ final class MemberIndex {
 	}
 
 	/**
+	 * Returns one page of groups (parent + subgroups) a member is *not*
+	 * currently in, for the User Assignment Add Groups view, per
+	 * subgroup-crud-and-admin-pages-design.md section 12. "Every group"
+	 * here means every distinct subgroup_id known anywhere in the local
+	 * index - a subgroup with no members at all yet (never synced with
+	 * anyone in it) won't appear until it has at least one. A member's
+	 * row with override_type = 'removed' counts as *not* currently in
+	 * that group (the complement of get_member_groups()'s own
+	 * exclusion), so a manually-removed group correctly reappears here
+	 * as addable again.
+	 *
+	 * @param string $email    Member's email address.
+	 * @param int    $page     1-based page number.
+	 * @param int    $per_page Rows per page.
+	 * @param string $search   Optional search term.
+	 * @return array<int, array{subgroup_id: int, subgroup_slug: string, subgroup_title: string}>
+	 */
+	public static function get_addable_groups( string $email, int $page, int $per_page, string $search = '' ): array {
+		global $wpdb;
+
+		$table  = self::table_name();
+		$offset = max( 0, ( max( 1, $page ) - 1 ) * $per_page );
+
+		list( $where_sql, $params ) = self::addable_groups_where( $email, $search );
+
+		$params[] = $per_page;
+		$params[] = $offset;
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- $table is our own fixed table name; $where_sql is a fixed fragment built by addable_groups_where() containing only placeholders, filled via $params below.
+		$sql = $wpdb->prepare(
+			"SELECT subgroup_id, MAX(subgroup_slug) AS subgroup_slug, MAX(subgroup_title) AS subgroup_title
+			FROM $table
+			WHERE $where_sql
+			GROUP BY subgroup_id
+			ORDER BY MAX(subgroup_title) ASC, MAX(subgroup_slug) ASC
+			LIMIT %d OFFSET %d",
+			$params
+		);
+		// phpcs:enable
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $sql was already built via $wpdb->prepare() above.
+		$rows = $wpdb->get_results( $sql, ARRAY_A );
+
+		return array_map(
+			static function ( array $row ): array {
+				return array(
+					'subgroup_id'    => (int) $row['subgroup_id'],
+					'subgroup_slug'  => (string) $row['subgroup_slug'],
+					'subgroup_title' => (string) $row['subgroup_title'],
+				);
+			},
+			(array) $rows
+		);
+	}
+
+	/**
+	 * Total number of groups a member is not currently in, optionally
+	 * filtered by a search term - see get_addable_groups() above for the
+	 * shared exclusion/search semantics.
+	 *
+	 * @param string $email  Member's email address.
+	 * @param string $search Optional search term.
+	 * @return int
+	 */
+	public static function count_addable_groups( string $email, string $search = '' ): int {
+		global $wpdb;
+
+		$table = self::table_name();
+
+		list( $where_sql, $params ) = self::addable_groups_where( $email, $search );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- $table is our own fixed table name; $where_sql is a fixed fragment built by addable_groups_where() containing only placeholders, filled via $params below.
+		$sql = $wpdb->prepare(
+			"SELECT COUNT(*) FROM ( SELECT subgroup_id FROM $table WHERE $where_sql GROUP BY subgroup_id ) addable",
+			$params
+		);
+		// phpcs:enable
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $sql was already built via $wpdb->prepare() above.
+		return (int) $wpdb->get_var( $sql );
+	}
+
+	/**
+	 * Builds the shared WHERE fragment (with %s placeholders) for
+	 * get_addable_groups()/count_addable_groups() above: every group in
+	 * the index the member does not currently count as subscribed to
+	 * (the complement of member_groups_where()'s own exclusion),
+	 * optionally further filtered by a subgroup slug/title search term.
+	 *
+	 * @param string $email  Member's email address.
+	 * @param string $search Optional search term.
+	 * @return array{0: string, 1: array<int, string>} WHERE SQL fragment and its placeholder values, in order.
+	 */
+	private static function addable_groups_where( string $email, string $search ): array {
+		global $wpdb;
+
+		$table = self::table_name();
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is our own fixed table name, not user input.
+		$where  = "subgroup_id NOT IN ( SELECT subgroup_id FROM $table WHERE email = %s AND ( override_type IS NULL OR override_type != 'removed' ) )";
+		$params = array( $email );
+
+		if ( '' !== $search ) {
+			$like     = '%' . $wpdb->esc_like( $search ) . '%';
+			$where   .= ' AND ( subgroup_slug LIKE %s OR subgroup_title LIKE %s )';
+			$params[] = $like;
+			$params[] = $like;
+		}
+
+		return array( $where, $params );
+	}
+
+	/**
 	 * Total number of distinct members in the index, optionally filtered
 	 * by a search term matched against member name/email or subgroup
 	 * name/slug/title. Backs the User Assignment List page's pagination,

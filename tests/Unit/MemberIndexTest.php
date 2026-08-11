@@ -527,4 +527,64 @@ final class MemberIndexTest extends WP_UnitTestCase {
 		$this->assertNull( $cleared['override_type'] );
 		$this->assertSame( 'added', $untouched['override_type'], 'clear_override() must only touch the one targeted row.' );
 	}
+
+	public function test_get_addable_groups_excludes_groups_the_member_is_already_in(): void {
+		// Seed the universe of known groups via another member - a
+		// subgroup only appears in the index once someone has synced
+		// into it.
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 3, 'perception-is-all+sustaining', 'Sustaining', 1 );
+
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$rows  = MemberIndex::get_addable_groups( 'target@example.test', 1, 20 );
+		$slugs = array_column( $rows, 'subgroup_slug' );
+
+		$this->assertNotContains( 'perception-is-all', $slugs );
+		$this->assertContains( 'perception-is-all+announcements', $slugs );
+		$this->assertContains( 'perception-is-all+sustaining', $slugs );
+	}
+
+	public function test_get_addable_groups_includes_a_group_with_a_removed_override(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		MemberIndex::apply_remove( 'target@example.test', 2, 1 );
+
+		$rows  = MemberIndex::get_addable_groups( 'target@example.test', 1, 20 );
+		$slugs = array_column( $rows, 'subgroup_slug' );
+
+		$this->assertContains( 'perception-is-all+announcements', $slugs, 'A manually-removed group must reappear as addable.' );
+	}
+
+	public function test_get_addable_groups_search_matches_subgroup_slug_or_title(): void {
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 3, 'perception-is-all+sustaining', 'Sustaining', 1 );
+
+		$rows = MemberIndex::get_addable_groups( 'target@example.test', 1, 20, 'announcements' );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'perception-is-all+announcements', $rows[0]['subgroup_slug'] );
+	}
+
+	public function test_count_addable_groups_with_search(): void {
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+
+		$this->assertSame( 1, MemberIndex::count_addable_groups( 'target@example.test', 'announcements' ) );
+	}
+
+	public function test_get_addable_groups_respects_page_and_per_page(): void {
+		for ( $i = 1; $i <= 5; $i++ ) {
+			MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', $i, "perception-is-all+list{$i}", sprintf( 'List %02d', $i ), 1 );
+		}
+
+		$page_one = MemberIndex::get_addable_groups( 'target@example.test', 1, 2 );
+		$page_two = MemberIndex::get_addable_groups( 'target@example.test', 2, 2 );
+
+		$this->assertCount( 2, $page_one );
+		$this->assertCount( 2, $page_two );
+		$this->assertNotSame( $page_one[0]['subgroup_id'], $page_two[0]['subgroup_id'] );
+	}
 }

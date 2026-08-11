@@ -23,9 +23,9 @@ This plugin does not introduce its own mailing-list preference form — members 
 
 Administrators interact with the plugin through a "GroupsIO Management" admin menu, with three pages:
 
-* **Feature Controls** — the plugin's own operational configuration: mandatory mailing lists, the grace period before removal on a lapsed membership, log retention, and an emergency kill switch to halt all sync activity. (An audit log of every add/remove action is planned for a later phase - the underlying table exists today, but recording and reading entries is not yet built.)
+* **Feature Controls** — the plugin's own operational configuration: mandatory mailing lists, the grace period before removal on a lapsed membership, log retention, and an emergency kill switch to halt all sync activity. Every queued add/remove action, and every settings change made on this page, is recorded to an audit log; a dedicated view for reading that log back (a per-member audit view) is planned for a later phase and not yet built.
 * **Subgroup Management** — direct administration of the underlying Groups.io subgroups themselves (as opposed to member sync, which is automatic): a list of every subgroup showing its full address and member count, a page to create a new subgroup (name, an optional cosmetic title, and an optional description), and a details page per subgroup to view its live member list, edit its name/title/description, and delete it.
-* **User Assignment** — a paginated, searchable list of every member and their total Groups.io group count is available today; per-member Details and Add Groups views (to manually add, remove, or suspend a specific member's subgroup access for intervention when automation misbehaves) are not yet built.
+* **User Assignment** — a paginated, searchable list of every member and their total Groups.io group count; a per-member Details view to review their current group membership and manually queue a removal or clear a manual override; and an Add Groups view to queue adding the member to any group they're not currently in — for intervention when automation misbehaves. Suspend (as opposed to add/remove) remains deferred to a later phase.
 
 ## Where to Go Next
 
