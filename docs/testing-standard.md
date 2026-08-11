@@ -22,9 +22,10 @@ This document specifies how testing works for this project: framework, environme
 ### 4. Integration Tests
 
 * Integration tests make real network calls to the dedicated test Groups.io group(s) that already exist for this project (confirmed available). They are never run against the production BITS Groups.io group.
-* Per the explicit decision made in planning, integration tests run automatically on every pull request, using a test-group Groups.io API key stored as a GitHub Actions secret and scoped via environment protection rules (per the Security document, section 6).
+* **Changed 2026-08-11**: integration tests are no longer run automatically on every pull request. They run only via manual dispatch of the dedicated `integration.yml` workflow (`docs/ci.md` section 3.3), using a test-group Groups.io API key stored as a GitHub Actions secret and scoped via environment protection rules (per the Security document, section 6). Automated CI (every pull request) instead relies solely on the mocked unit suite (section 3 above) for Groups.io-touching code paths.
+* A contributor changing `GroupsIoApiClient` or any other code path that calls Groups.io is expected to manually trigger the integration workflow against their branch and confirm it passes before requesting merge approval - this is a manual step in the contributor's own workflow now, not a CI-enforced gate.
 * Integration test responsibilities include: the Groups.io API client's real add/remove/list operations against the test group (confirming the actual contract established in Phase 2); end-to-end join/change sync against a test PMPro-equivalent state; end-to-end removal (expiration, cancellation, GDPR erasure) against the test group; drift reconciliation correcting a manually-induced mismatch in the test group; the magic link request-to-login flow, run against the local/test WordPress environment (this part doesn't require Groups.io itself, only a real WordPress session).
-* Because integration tests consume real Groups.io API rate-limit budget on every PR, test setup should reuse/clean up test-group state between runs (e.g., removing test members added during a run) rather than accumulating orphaned test data over time.
+* Because integration tests consume real Groups.io API rate-limit budget on every run, test setup should reuse/clean up test-group state between runs (e.g., removing test members added during a run) rather than accumulating orphaned test data over time.
 
 ### 4a. End-to-End (E2E) Browser Tests
 

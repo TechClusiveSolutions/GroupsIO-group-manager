@@ -1,0 +1,44 @@
+name: Integration Tests
+
+# Manual only, per docs/ci.md section 3.3 (changed 2026-08-11): this
+# suite makes real calls to the dedicated test Groups.io group and no
+# longer runs automatically on pull requests. Trigger it from the
+# Actions tab's "Run workflow" button, or `gh workflow run
+# integration.yml [--ref <branch>]`, before requesting merge approval
+# for any change touching GroupsIoApiClient or another Groups.io-calling
+# code path (docs/testing-standard.md section 4).
+on:
+  workflow_dispatch:
+
+jobs:
+  integration-tests:
+    name: Integration tests (live Groups.io test group)
+    runs-on: ubuntu-latest
+    environment: groupsio-test-group
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: true
+          MYSQL_DATABASE: wordpress_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.0"
+          tools: composer
+      - run: composer install --no-progress --prefer-dist
+      - name: Install WordPress test suite
+        run: bash bin/install-wp-tests.sh wordpress_test root '' 127.0.0.1 latest
+      - name: Run integration suite against the real test Groups.io group
+        env:
+          GROUPS_IO_TEST_API_KEY: ${{ secrets.GROUPS_IO_TEST_API_KEY }}
+          GROUPS_IO_TEST_PARENT_GROUP: ${{ vars.GROUPS_IO_TEST_PARENT_GROUP }}
+        run: vendor/bin/phpunit -c phpunit.integration.xml.dist

@@ -14,10 +14,11 @@ This document specifies what CI runs, on what triggers, and what gates what, per
 
 ### 3. Workflow Files
 
-CI is split across two GitHub Actions workflow files:
+CI is split across three GitHub Actions workflow files:
 
 * **`docs.yml`**: contains the documentation linting job (section 3.1) plus a no-op placeholder job for code, which always passes and does no actual work. The no-op job exists so that a required-status-check configuration referencing this workflow doesn't break for documentation-only PRs that don't touch code — it's a placeholder seam, not a real check, and is not a substitute for `ci.yml`'s real code jobs.
 * **`ci.yml`**: the main workflow. It runs the documentation linting test (the same check defined for `docs.yml`) and the full set of code functional tests (section 3.2), so that every pull request — whether docs-only, code-only, or mixed — gets both documentation and code validated in one place.
+* **`integration.yml`**: the live integration suite (section 3.3), a separate workflow that only ever runs on manual dispatch — it is not part of the automatic PR pipeline `ci.yml` runs.
 
 #### 3.1 Documentation Linting
 
@@ -29,8 +30,14 @@ CI is split across two GitHub Actions workflow files:
 * **Static analysis**: PHPStan at the project's configured level. Failure blocks merge.
 * **Unit tests**: the full PHPUnit unit suite (mocked HTTP, no network calls), against the WordPress core test suite bootstrap, on the supported PHP version matrix (PHP 8.0 as the floor; additional versions added to the matrix as adopted). Failure blocks merge.
 * **Coverage gate**: computed from the unit test run; must be at or above 80% (per the Testing Standard document, section 5). Failure blocks merge.
-* **Integration tests**: the full integration suite, making real calls to the dedicated test Groups.io group(s), using the test-group credential stored as a GitHub Actions secret and scoped via environment protection rules (per the Security document, section 6). Failure blocks merge. This job is restricted by the environment protection rules to run only for PRs from within the `TechClusiveSolutions` org — not from external fork pull requests — since the test-group secret cannot be safely exposed to fork-originated workflow runs.
 * **E2E tests (Playwright)**: a browser-level end-to-end suite (`tests/e2e/`) covering the admin UI - the GroupsIO Management menu structure, Feature Controls, and Subgroup Management's full List/Create/Details lifecycle, including one test that exercises a real login through to a Groups.io update. Runs against a `wp-env` instance started in the job (`npx wp-env start`) with a safety-guarded WordPress mu-plugin (`tests/e2e/mu-plugins/groupsio-api-mock.php`) mocking the Groups.io API - the mock only activates for this project's established fake dev/test API keys, so it can never intercept a real credential's requests. No live Groups.io credentials are required or used. Failure blocks merge.
+
+#### 3.3 Integration Tests (Manual Only)
+
+* **Changed 2026-08-11**: the integration suite (`tests/integration/`), which makes real calls to the dedicated test Groups.io group(s) using the test-group credential stored as a GitHub Actions secret and scoped via environment protection rules (per the Security document, section 6), no longer runs automatically on pull requests. It lives in its own workflow, `integration.yml`, triggered only via manual `workflow_dispatch` (the Actions tab's "Run workflow" button, or `gh workflow run integration.yml`).
+* Rationale: running real Groups.io API calls on every push consumed live rate-limit budget and made every PR's CI run dependent on a third-party service's availability, for a suite whose main value is confirming the actual Groups.io API contract - not something that changes on every commit. The mocked unit suite (section 3.2) already runs on every PR and is the CI-enforced gate for day-to-day changes.
+* Not a merge gate: since it no longer runs automatically, a passing/failing integration run is not one of the checks required before merging a PR. A contributor touching `GroupsIoApiClient` or any Groups.io-calling code path is expected to manually trigger `integration.yml` against their branch before asking for merge approval, per the Testing Standard document, section 4.
+* Still restricted by the same environment protection rules as before (test-group secret access), so a manual run still can't be dispatched against a fork-originated branch without the appropriate authorization.
 
 ### 4. Version Bumping and Releases
 
