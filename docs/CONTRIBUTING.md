@@ -22,9 +22,9 @@ Thank you for your interest in contributing to the BITS Groups.io Membership Syn
 1. Confirm a GitHub issue exists for your change, with complete acceptance criteria (Given/When/Then for features, including at least one accessibility-focused scenario; Steps to Reproduce/Expected/Actual/Given-When-Then for bugs).
 2. Create a branch from `dev` using the appropriate prefix above.
 3. Write your code, following the project's linting (PHP_CodeSniffer/WPCS) and static analysis (PHPStan) configuration.
-4. Write the corresponding unit test and, where applicable, integration test.
+4. Write the corresponding unit test and, where applicable, integration test. If your change touches `GroupsIoApiClient` or another Groups.io-calling code path, manually trigger the `integration.yml` workflow against your branch and confirm it passes before requesting merge approval — the integration suite makes real calls to a test Groups.io group and no longer runs automatically on pull requests.
 5. If your branch is `feature/*` or `bug/*`, add an entry to `CHANGELOG.md`'s `## [Unreleased]` section under the matching subheading (`### Added`/`### Changed` for features, `### Fixed`/`### Security` for bug fixes). `docs/*` and `infra/*` branches are exempt — this isn't user-facing plugin behavior.
-6. Open a pull request against `dev`. CI must pass in full: documentation lint, code lint, static analysis, unit tests, the coverage gate, integration tests, the changelog check, and the branch-name check.
+6. Open a pull request against `dev`. CI must pass in full: documentation lint, code lint, static analysis, unit tests, the coverage gate, the changelog check, and the branch-name check.
 7. If your change touches a UI surface, include a note confirming screen reader verification (see the project's accessibility standard).
 8. If your change touches stored content, credentials, authentication, or the Groups.io API, note that it has been checked against the project's security document.
 
