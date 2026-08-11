@@ -77,6 +77,13 @@ Explicitly not in scope for this pass (later phases):
   (section 7) so entries actually get written, but reading/displaying them
   is the "per-member audit view" already scoped to Phase 7 (Admin
   Operability) in `phase-plan.md`.
+* **Added 2026-08-09**: a "Deleted Memberships" page — surfacing members
+  whose `(member, subgroup)` rows carry `override_type = 'removed'`
+  (excluded from the Details view's "currently subscribed" list per
+  section 12, since #61). Scoped as a future-scope backlog item under
+  Phase 7 (Admin Operability) in `phase-plan.md`, alongside the
+  per-member audit view — not part of #61 or any currently-approved
+  Phase 3 work.
 
 ### 3. Client Additions: `create_subgroup()` / `remove_subgroup()` — Resolved (see also section 11 for the later `update_subgroup()` / rename resolution)
 
@@ -395,20 +402,50 @@ organized and how actions execute, not what the page is fundamentally for.
     name/slug — a query matching a subgroup filters the list to members
     belonging to that subgroup.
   * Each member's name links to their Details view.
-* **Details view** (`?page=bits-groupsio-user-assignment&view=details&member=...`):
+* **Details view** (`?page=bits-groupsio-user-assignment&view=details&member=...`),
+  **expanded 2026-08-09** with the concrete query/action semantics below,
+  confirmed with the primary contributor ahead of #61's implementation:
   * A paginated list of the member's current subscribed groups (parent +
-    subgroups, per the local index), each row displaying the group as
-    "Title (namespace)" (e.g. "Sustaining Members
-    (`perception-is-all+sustaining-members`)"), a PMPro-expected indicator
-    (flags a disagreement between actual and PMPro-expected membership —
-    never conveyed by color alone), the current sticky-override state if
-    one is set, and a checkbox.
+    subgroups), each row displaying the group as "Title (namespace)" (e.g.
+    "Sustaining Members (`perception-is-all+sustaining-members`)"), a
+    PMPro-expected indicator (flags a disagreement between actual and
+    PMPro-expected membership — never conveyed by color alone), the
+    current sticky-override state if one is set, and a checkbox.
+  * Backed by two new `MemberIndex` query methods,
+    `get_member_groups( string $email, int $page, int $per_page, string $search = '' )`
+    and `count_member_groups( string $email, string $search = '' )`,
+    mirroring the List view's `get_members_page()`/`count_members()`
+    (section 6). Both exclude any row carrying `override_type = 'removed'`
+    — an explicitly-removed row no longer counts as "currently
+    subscribed" even before the next hourly sync corrects it, since a
+    member the admin just removed should not still appear as subscribed on
+    this same page. Search matches `subgroup_slug`/`subgroup_title`, same
+    convention as the List view's subgroup-name matching.
   * A search box + button filtering this member's own group list by
     subgroup name or title.
-  * "Remove Selected" button: queues a remove job (section 8) for each
-    checked group.
+  * "Remove Selected" button: queues a remove job (section 8,
+    `QueuedExecutionEngine::queue_remove()`) for each checked non-parent
+    group immediately. **If the parent-group row is among the checked
+    rows**, submitting shows an inline confirmation step first (same
+    pattern as Subgroup Management's delete confirmation — warning text
+    plus "Yes, remove"/"Cancel" on the same page, no separate
+    confirmation page) explaining that removing the parent group removes the member
+    from all of BITS' Groups.io presence, not just one list — confirmed
+    2026-08-09 that this action is intentionally allowed from this page,
+    but only behind that explicit warning. Non-parent rows checked
+    alongside the parent still queue immediately; only the parent row's
+    job waits on the confirmation.
   * "Clear override" control per row carrying an override flag, releasing
-    it back to normal automated management.
+    it back to normal automated management. Synchronous (a normal POST
+    handled on this page's own `load-{hook}` action, redirecting back to
+    the Details view with a notice), not queued — confirmed 2026-08-09
+    that this is a pure local write to the index row
+    (`MemberIndex::clear_override( string $email, int $subgroup_id )`, new
+    — the single-row counterpart to the existing
+    `clear_overrides_for_user()`, which clears every row for a user on a
+    PMPro level change) with no Groups.io API call and nothing to
+    meaningfully retry, so routing it through the queued execution engine
+    would add complexity for no benefit.
   * A link to the Add Groups view.
 * **Add Groups view** (`?page=bits-groupsio-user-assignment&view=add-groups&member=...`):
   * A paginated checkbox list of every group (parent + subgroups) the
