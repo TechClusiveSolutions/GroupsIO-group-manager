@@ -15,6 +15,16 @@
  * project's established fake dev/test values - never intercepts a call
  * made with a real credential, so this file is harmless even if it
  * were accidentally loaded somewhere it shouldn't be.
+ *
+ * Endpoints handled: getgroup, getsubgroups, getmembers, createsubgroup,
+ * updategroup, deletegroup, directadd, removemember. Added 2026-08-11:
+ * directadd/removemember - previously unhandled here (fell through to
+ * the generic "unhandled endpoint" 400), which silently broke every
+ * queued add/remove job (#59/#61/#62) on this environment, since
+ * QueuedExecutionEngine's real HTTP calls always failed with
+ * not_found. Anything calling this mock via the local wp-env dev site
+ * (not just Playwright) is affected by what this file does and does
+ * not implement - see .wp-env.json's mapping.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -239,6 +249,60 @@ add_filter(
 				bits_e2e_mock_save_state( $state );
 
 				return bits_e2e_mock_response( 200, bits_e2e_mock_group_object( $state['subgroups'][ $group_id ] ) );
+
+			case 'directadd':
+				$emails       = array_filter( array_map( 'trim', preg_split( '/\r\n|\r|\n/', (string) ( $params['emails'] ?? '' ) ) ) );
+				$subgroup_ids = array_filter( array_map( 'intval', explode( ',', (string) ( $params['subgroupids'] ?? '' ) ) ) );
+
+				if ( ! isset( $state['next_member_id'] ) ) {
+					$state['next_member_id'] = 900001;
+				}
+
+				foreach ( $subgroup_ids as $group_id ) {
+					if ( ! isset( $state['subgroups'][ $group_id ] ) ) {
+						continue;
+					}
+
+					foreach ( $emails as $email ) {
+						$already_member = false;
+						foreach ( $state['subgroups'][ $group_id ]['members'] as $member ) {
+							if ( $member['email'] === $email ) {
+								$already_member = true;
+								break;
+							}
+						}
+						if ( $already_member ) {
+							continue;
+						}
+
+						$state['subgroups'][ $group_id ]['members'][] = array(
+							'id'    => $state['next_member_id'],
+							'email' => $email,
+						);
+						$state['next_member_id']++;
+						$state['subgroups'][ $group_id ]['subs_count']++;
+					}
+				}
+				bits_e2e_mock_save_state( $state );
+
+				return bits_e2e_mock_response( 200, array( 'object' => 'ok' ) );
+
+			case 'removemember':
+				$member_info_id = (int) ( $params['member_info_id'] ?? 0 );
+
+				foreach ( $state['subgroups'] as $group_id => $subgroup ) {
+					foreach ( $subgroup['members'] as $index => $member ) {
+						if ( (int) $member['id'] === $member_info_id ) {
+							unset( $state['subgroups'][ $group_id ]['members'][ $index ] );
+							$state['subgroups'][ $group_id ]['members'] = array_values( $state['subgroups'][ $group_id ]['members'] );
+							$state['subgroups'][ $group_id ]['subs_count']--;
+							break 2;
+						}
+					}
+				}
+				bits_e2e_mock_save_state( $state );
+
+				return bits_e2e_mock_response( 200, array( 'object' => 'ok' ) );
 
 			case 'deletegroup':
 				$group_id = (int) ( $params['group_id'] ?? 0 );
