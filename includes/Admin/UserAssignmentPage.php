@@ -15,31 +15,34 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * List view (#60) and Details view (#61), per
- * subgroup-crud-and-admin-pages-design.md section 12. The Add Groups
- * view (#62) is a separate unit of work. This is the default landing
- * page for the "GroupsIO Management" top-level menu.
+ * List view (#60), Details view (#61), and Add Groups view (#62), per
+ * subgroup-crud-and-admin-pages-design.md section 12. This is the
+ * default landing page for the "GroupsIO Management" top-level menu.
  *
  * The List view is read-only (no POST handling). The Details view adds
- * two state-changing actions: "Remove Selected" (queues a remove job
+ * three state-changing actions: "Remove Selected" (queues a remove job
  * per checked group, via QueuedExecutionEngine) and "Clear override"
  * (a synchronous, pure local write via MemberIndex::clear_override() -
  * no Groups.io call, so it's a nonce-protected GET action link,
  * matching core's own "Trash" link convention, rather than a full POST
- * form). Both are handled on this page's own `load-{hook}` action (see
- * GroupsIoManagementMenu::add_menu_pages()), not inside render() -
- * WordPress's admin.php already prints the admin header/nav before a
- * page's own render callback runs, so a wp_safe_redirect() issued from
- * inside render() on a real submission always fails with "headers
- * already sent" - load-{hook} fires early, before any output, which is
- * the standard WordPress hook for exactly this (same pattern
- * SubgroupManagementPage already uses).
+ * form). The Add Groups view adds a fourth: "Add Selected" (queues an
+ * add job per checked group, mirroring "Remove Selected" - adding a
+ * group is never dangerous enough to warrant a confirmation step the
+ * way removing the parent group is). All are handled on this page's
+ * own `load-{hook}` action (see GroupsIoManagementMenu::add_menu_pages()),
+ * not inside render() - WordPress's admin.php already prints the admin
+ * header/nav before a page's own render callback runs, so a
+ * wp_safe_redirect() issued from inside render() on a real submission
+ * always fails with "headers already sent" - load-{hook} fires early,
+ * before any output, which is the standard WordPress hook for exactly
+ * this (same pattern SubgroupManagementPage already uses).
  */
 final class UserAssignmentPage {
 
 	public const SLUG = 'bits-groupsio-user-assignment';
 
-	private const VIEW_DETAILS = 'details';
+	private const VIEW_DETAILS    = 'details';
+	private const VIEW_ADD_GROUPS = 'add-groups';
 
 	private const PER_PAGE = 20;
 
@@ -55,6 +58,7 @@ final class UserAssignmentPage {
 	private const NONCE_ACTION_REMOVE_SELECTED       = 'bits_groupsio_remove_selected';
 	private const NONCE_ACTION_CONFIRM_PARENT_REMOVE = 'bits_groupsio_confirm_parent_remove';
 	private const NONCE_ACTION_CLEAR_OVERRIDE        = 'bits_groupsio_clear_override';
+	private const NONCE_ACTION_ADD_SELECTED          = 'bits_groupsio_add_selected';
 
 	/**
 	 * Returns this page's fixed notice vocabulary as {code: [type,
@@ -66,6 +70,8 @@ final class UserAssignmentPage {
 		return array(
 			/* translators: %s: number of group removals queued. */
 			'removed_queued'   => array( 'success', __( '%s group removal(s) queued.', 'bits-groupsio-sync' ) ),
+			/* translators: %s: number of group additions queued. */
+			'added_queued'     => array( 'success', __( '%s group addition(s) queued.', 'bits-groupsio-sync' ) ),
 			'override_cleared' => array( 'success', __( 'Override cleared.', 'bits-groupsio-sync' ) ),
 			'invalid_request'  => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
 		);
@@ -75,8 +81,8 @@ final class UserAssignmentPage {
 	 * Handles this page's own state-changing actions, if any, ending the
 	 * request via redirect + exit. Registered on `load-{$hook_suffix}` by
 	 * GroupsIoManagementMenu. Dispatches POST actions (Remove Selected,
-	 * confirming a parent-group removal) and the one GET action (Clear
-	 * override).
+	 * confirming a parent-group removal, Add Selected) and the one GET
+	 * action (Clear override).
 	 *
 	 * @return void
 	 * @codeCoverageIgnore Dispatch-then-exit wrapper; process_*() below carries the tested logic.
@@ -118,6 +124,16 @@ final class UserAssignmentPage {
 					$result['email'],
 					$result['invalid'] ? 'invalid_request' : 'removed_queued',
 					$result['invalid'] ? '' : '1'
+				);
+				return;
+			}
+
+			if ( 'add_selected' === $action ) {
+				$result = self::process_add_selected();
+				self::redirect_with_notice(
+					$result['email'],
+					$result['invalid'] ? 'invalid_request' : 'added_queued',
+					$result['invalid'] ? '' : (string) $result['queued_count']
 				);
 				return;
 			}
@@ -247,6 +263,61 @@ final class UserAssignmentPage {
 	}
 
 	/**
+	 * The redirect-free half of "Add Selected" handling: verifies the
+	 * nonce, re-validates each checked subgroup id against the member's
+	 * own addable set (never trusting client-submitted ids blindly), and
+	 * queues an immediate add job for every checked group.
+	 *
+	 * @return array{queued_count: int, email: string, invalid: bool}
+	 */
+	public static function process_add_selected(): array {
+		check_admin_referer( self::NONCE_ACTION_ADD_SELECTED );
+
+		$email   = isset( $_POST['member'] ) ? sanitize_email( wp_unslash( $_POST['member'] ) ) : '';
+		$checked = isset( $_POST['subgroup_ids'] ) && is_array( $_POST['subgroup_ids'] )
+			? array_map( 'absint', wp_unslash( $_POST['subgroup_ids'] ) )
+			: array();
+
+		if ( '' === $email || empty( $checked ) ) {
+			return array(
+				'queued_count' => 0,
+				'email'        => $email,
+				'invalid'      => true,
+			);
+		}
+
+		$addable       = MemberIndex::get_addable_groups( $email, 1, self::MAX_MEMBER_GROUPS );
+		$user          = get_user_by( 'email', $email );
+		$user_id       = $user ? (int) $user->ID : 0;
+		$display_name  = MemberIndex::get_display_name( $email );
+		$admin_user_id = get_current_user_id();
+		$queued_count  = 0;
+
+		foreach ( $addable as $group ) {
+			if ( ! in_array( $group['subgroup_id'], $checked, true ) ) {
+				continue;
+			}
+
+			QueuedExecutionEngine::queue_add(
+				$user_id,
+				$email,
+				$display_name,
+				$group['subgroup_id'],
+				$group['subgroup_slug'],
+				$group['subgroup_title'],
+				$admin_user_id
+			);
+			++$queued_count;
+		}
+
+		return array(
+			'queued_count' => $queued_count,
+			'email'        => $email,
+			'invalid'      => 0 === $queued_count,
+		);
+	}
+
+	/**
 	 * The redirect-free half of "Clear override" handling: verifies the
 	 * nonce and, if a member/subgroup id pair was actually supplied,
 	 * clears that row's sticky override flag. Deliberately does not
@@ -296,6 +367,9 @@ final class UserAssignmentPage {
 		if ( self::VIEW_DETAILS === $view ) {
 			$email = isset( $_GET['member'] ) ? sanitize_email( wp_unslash( $_GET['member'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only navigation, no state change.
 			self::render_details_view( $email );
+		} elseif ( self::VIEW_ADD_GROUPS === $view ) {
+			$email = isset( $_GET['member'] ) ? sanitize_email( wp_unslash( $_GET['member'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only navigation, no state change.
+			self::render_add_groups_view( $email );
 		} else {
 			echo '<h1>' . esc_html__( 'User Assignment', 'bits-groupsio-sync' ) . '</h1>';
 			self::render_list_view();
@@ -465,10 +539,7 @@ final class UserAssignmentPage {
 	 * Renders the Details view: a paginated, searchable list of one
 	 * member's currently subscribed groups, with a "Remove Selected"
 	 * bulk action, per-row "Clear override" controls, and a link to the
-	 * Add Groups view (#62 - not yet built; the link target already
-	 * matches the URL scheme section 12 specifies for it, mirroring how
-	 * the List view already links ahead to this Details view before #61
-	 * existed).
+	 * Add Groups view.
 	 *
 	 * @param string $email Member's email address, from the `member` query arg.
 	 * @return void
@@ -806,6 +877,219 @@ final class UserAssignmentPage {
 	}
 
 	/**
+	 * Renders the Add Groups view: a paginated, searchable checkbox list
+	 * of every group (parent + subgroups) the member is *not* currently
+	 * in, per section 12. "Add Selected" queues an add job for each
+	 * checked group and redirects to the Details view - the actual adds
+	 * happen asynchronously; this page only confirms the jobs were
+	 * queued, not that they've completed.
+	 *
+	 * @param string $email Member's email address, from the `member` query arg.
+	 * @return void
+	 */
+	private static function render_add_groups_view( string $email ): void {
+		echo '<h1>' . esc_html( self::add_groups_heading( $email ) ) . '</h1>';
+
+		printf(
+			'<p><a href="%1$s">%2$s</a></p>',
+			esc_url( self::details_url( $email ) ),
+			esc_html__( 'Back to Details', 'bits-groupsio-sync' )
+		);
+
+		self::render_notice();
+
+		if ( '' === $email ) {
+			printf(
+				'<div class="notice notice-error"><p>%s</p></div>',
+				esc_html__( 'No member specified.', 'bits-groupsio-sync' )
+			);
+			return;
+		}
+
+		$search = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only search/filter, no state change.
+		$paged  = isset( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only navigation, no state change.
+
+		self::render_add_groups_search_form( $email, $search );
+
+		$total_items = MemberIndex::count_addable_groups( $email, $search );
+
+		if ( 0 === $total_items ) {
+			echo '<p>' . esc_html__( 'No groups available to add.', 'bits-groupsio-sync' ) . '</p>';
+			return;
+		}
+
+		$total_pages = (int) ceil( $total_items / self::PER_PAGE );
+		$paged       = min( $paged, $total_pages );
+		$groups      = MemberIndex::get_addable_groups( $email, $paged, self::PER_PAGE, $search );
+
+		self::render_addable_group_table( $email, $groups );
+		self::render_add_groups_pagination( $email, $paged, $total_pages, $search );
+	}
+
+	/**
+	 * Builds the Add Groups view's heading, matching the Details view's
+	 * own display-name-preferring fallback convention.
+	 *
+	 * @param string $email Member's email address.
+	 * @return string
+	 */
+	private static function add_groups_heading( string $email ): string {
+		if ( '' === $email ) {
+			return __( 'Add Groups', 'bits-groupsio-sync' );
+		}
+
+		$display_name = MemberIndex::get_display_name( $email );
+
+		return sprintf(
+			/* translators: %s: member's display name or email address. */
+			__( 'Add Groups: %s', 'bits-groupsio-sync' ),
+			'' !== $display_name ? $display_name : $email
+		);
+	}
+
+	/**
+	 * Renders the Add Groups view's search box + button, same subgroup
+	 * name/title matching as the Details view.
+	 *
+	 * @param string $email  Member's email address, round-tripped as a hidden field.
+	 * @param string $search Current search term, if any, for re-display.
+	 * @return void
+	 */
+	private static function render_add_groups_search_form( string $email, string $search ): void {
+		?>
+		<form method="get" action="<?php echo esc_url( admin_url( 'admin.php' ) ); ?>" role="search">
+			<input type="hidden" name="page" value="<?php echo esc_attr( self::SLUG ); ?>" />
+			<input type="hidden" name="view" value="<?php echo esc_attr( self::VIEW_ADD_GROUPS ); ?>" />
+			<input type="hidden" name="member" value="<?php echo esc_attr( $email ); ?>" />
+			<label for="bits-groupsio-add-groups-search"><?php esc_html_e( 'Search groups to add', 'bits-groupsio-sync' ); ?></label>
+			<input
+				type="search"
+				id="bits-groupsio-add-groups-search"
+				name="s"
+				value="<?php echo esc_attr( $search ); ?>"
+				autofocus
+			/>
+			<button type="submit" class="button"><?php esc_html_e( 'Search', 'bits-groupsio-sync' ); ?></button>
+		</form>
+		<?php
+	}
+
+	/**
+	 * Renders the addable-groups checkbox table and its "Add Selected"
+	 * bulk action.
+	 *
+	 * @param string                                                                             $email  Member's email address.
+	 * @param array<int, array{subgroup_id: int, subgroup_slug: string, subgroup_title: string}> $groups One page of groups the member is not currently in.
+	 * @return void
+	 */
+	private static function render_addable_group_table( string $email, array $groups ): void {
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin.php' ) ) . '">';
+		wp_nonce_field( self::NONCE_ACTION_ADD_SELECTED );
+		echo '<input type="hidden" name="bits_groupsio_action" value="add_selected" />';
+		printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $email ) );
+
+		echo '<table class="wp-list-table widefat fixed striped">';
+		echo '<caption class="screen-reader-text">' . esc_html__( 'Groups this member is not currently in', 'bits-groupsio-sync' ) . '</caption>';
+		echo '<thead><tr>';
+		echo '<th scope="col" class="check-column"><span class="screen-reader-text">' . esc_html__( 'Select', 'bits-groupsio-sync' ) . '</span></th>';
+		echo '<th scope="col">' . esc_html__( 'Group', 'bits-groupsio-sync' ) . '</th>';
+		echo '</tr></thead><tbody>';
+
+		foreach ( $groups as $group ) {
+			$checkbox_id = 'bits-groupsio-addable-' . $group['subgroup_id'];
+			$label       = sprintf(
+				/* translators: 1: group title, 2: group slug/namespace. */
+				__( '%1$s (%2$s)', 'bits-groupsio-sync' ),
+				'' !== $group['subgroup_title'] ? $group['subgroup_title'] : $group['subgroup_slug'],
+				$group['subgroup_slug']
+			);
+
+			echo '<tr>';
+			printf(
+				'<td><input type="checkbox" id="%1$s" name="subgroup_ids[]" value="%2$s" /><label for="%1$s" class="screen-reader-text">%3$s</label></td>',
+				esc_attr( $checkbox_id ),
+				esc_attr( (string) $group['subgroup_id'] ),
+				esc_html(
+					sprintf(
+						/* translators: %s: group label ("Title (namespace)"). */
+						__( 'Select %s', 'bits-groupsio-sync' ),
+						$label
+					)
+				)
+			);
+			echo '<td>' . esc_html( $label ) . '</td>';
+			echo '</tr>';
+		}
+
+		echo '</tbody></table>';
+
+		submit_button( __( 'Add Selected', 'bits-groupsio-sync' ) );
+		echo '</form>';
+	}
+
+	/**
+	 * Renders the Add Groups view's pagination controls, preserving the
+	 * current member and search term across page links.
+	 *
+	 * @param string $email        Member's email address.
+	 * @param int    $current_page Current 1-based page number.
+	 * @param int    $total_pages  Total number of pages.
+	 * @param string $search       Current search term, if any, to preserve across page links.
+	 * @return void
+	 */
+	private static function render_add_groups_pagination( string $email, int $current_page, int $total_pages, string $search ): void {
+		if ( $total_pages <= 1 ) {
+			return;
+		}
+
+		echo '<nav aria-label="' . esc_attr__( 'Add groups pagination', 'bits-groupsio-sync' ) . '">';
+		echo '<ul class="bits-groupsio-pagination">';
+
+		for ( $page = 1; $page <= $total_pages; $page++ ) {
+			$args = array(
+				'page'   => self::SLUG,
+				'view'   => self::VIEW_ADD_GROUPS,
+				'member' => rawurlencode( $email ),
+				'paged'  => $page,
+			);
+			if ( '' !== $search ) {
+				$args['s'] = $search;
+			}
+			$url = add_query_arg( $args, admin_url( 'admin.php' ) );
+
+			echo '<li>';
+			if ( $page === $current_page ) {
+				printf(
+					'<span aria-current="page">%s</span>',
+					esc_html(
+						sprintf(
+							/* translators: %d: page number. */
+							__( 'Page %d', 'bits-groupsio-sync' ),
+							$page
+						)
+					)
+				);
+			} else {
+				printf(
+					'<a href="%s">%s</a>',
+					esc_url( $url ),
+					esc_html(
+						sprintf(
+							/* translators: %d: page number. */
+							__( 'Page %d', 'bits-groupsio-sync' ),
+							$page
+						)
+					)
+				);
+			}
+			echo '</li>';
+		}
+
+		echo '</ul>';
+		echo '</nav>';
+	}
+
+	/**
 	 * Renders a fixed-vocabulary notice banner from the `bits_notice`
 	 * (and optional `bits_notice_detail`) query args, if present.
 	 * Mirrors SubgroupManagementPage's own render_notice().
@@ -884,8 +1168,7 @@ final class UserAssignmentPage {
 	}
 
 	/**
-	 * Builds a member's Add Groups view URL (#62 - not yet built; see
-	 * the class doc comment).
+	 * Builds a member's Add Groups view URL.
 	 *
 	 * @param string $email Member's email address.
 	 * @return string
@@ -894,7 +1177,7 @@ final class UserAssignmentPage {
 		return add_query_arg(
 			array(
 				'page'   => self::SLUG,
-				'view'   => 'add-groups',
+				'view'   => self::VIEW_ADD_GROUPS,
 				'member' => rawurlencode( $email ),
 			),
 			admin_url( 'admin.php' )

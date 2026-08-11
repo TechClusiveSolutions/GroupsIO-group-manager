@@ -445,4 +445,145 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 
 		$this->assertTrue( $result['invalid'] );
 	}
+
+	public function test_add_groups_view_renders_no_groups_message_when_nothing_addable(): void {
+		$_GET['view']   = 'add-groups';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'No groups available to add.', $output );
+	}
+
+	public function test_add_groups_view_renders_checkbox_row_with_title_and_namespace(): void {
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+
+		$_GET['view']   = 'add-groups';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'Announcements (perception-is-all+announcements)', $output );
+	}
+
+	public function test_add_groups_view_excludes_groups_the_member_is_already_in(): void {
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$_GET['view']   = 'add-groups';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'Announcements (perception-is-all+announcements)', $output );
+		$this->assertStringNotContainsString( 'perception-is-all (perception-is-all)', $output );
+	}
+
+	public function test_add_groups_view_search_filters_by_subgroup_name_or_title(): void {
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+
+		$_GET['view']   = 'add-groups';
+		$_GET['member'] = 'target@example.test';
+		$_GET['s']      = 'announcements';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'Announcements', $output );
+		$this->assertStringNotContainsString( 'perception-is-all (perception-is-all)', $output );
+	}
+
+	public function test_add_groups_view_pagination_navigates_to_the_correct_subsequent_page(): void {
+		// PER_PAGE is 20 - seed 21 groups (padded titles so alphabetic sort matches numeric order).
+		for ( $i = 1; $i <= 21; $i++ ) {
+			MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', $i, "perception-is-all+list{$i}", sprintf( 'List %02d', $i ), 1 );
+		}
+
+		$_GET['view']   = 'add-groups';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$page_one = ob_get_clean();
+
+		$this->assertStringContainsString( 'Add groups pagination', $page_one );
+		$this->assertStringNotContainsString( 'List 21', $page_one );
+
+		$_GET['paged'] = '2';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$page_two = ob_get_clean();
+
+		$this->assertStringContainsString( 'List 21', $page_two );
+		$this->assertStringNotContainsString( 'List 01', $page_two );
+	}
+
+	public function test_add_groups_view_links_back_to_the_details_view(): void {
+		$_GET['view']   = 'add-groups';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'view=details', $output );
+		$this->assertStringContainsString( 'Back to Details', $output );
+	}
+
+	public function test_process_add_selected_queues_a_job_per_checked_group(): void {
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		MemberIndex::apply_add( 0, 'seed@example.test', 'Seed', 3, 'perception-is-all+sustaining', 'Sustaining', 1 );
+
+		$_POST['member']       = 'target@example.test';
+		$_POST['subgroup_ids'] = array( '2', '3' );
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_add_selected' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_add_selected();
+
+		unset( $_POST['member'], $_POST['subgroup_ids'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertFalse( $result['invalid'] );
+		$this->assertSame( 2, $result['queued_count'] );
+		$this->assertNotFalse( as_next_scheduled_action( self::HOOK ) );
+	}
+
+	public function test_process_add_selected_ignores_ids_not_in_the_addable_set(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$_POST['member']       = 'target@example.test';
+		$_POST['subgroup_ids'] = array( '1' );
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_add_selected' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_add_selected();
+
+		unset( $_POST['member'], $_POST['subgroup_ids'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertTrue( $result['invalid'], 'A group the member is already in must not be queued via this action.' );
+		$this->assertFalse( as_next_scheduled_action( self::HOOK ) );
+	}
+
+	public function test_process_add_selected_is_invalid_when_nothing_checked(): void {
+		$_POST['member']       = 'target@example.test';
+		$_POST['subgroup_ids'] = array();
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_add_selected' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_add_selected();
+
+		unset( $_POST['member'], $_POST['subgroup_ids'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertTrue( $result['invalid'] );
+	}
 }
