@@ -588,8 +588,8 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 	}
 
 	/**
-	 * Regression test: an explicit action="{admin_url}/admin.php" on
-	 * these POST forms strips the page query arg WordPress needs to
+	 * Regression test (#78): an explicit action="{admin_url}/admin.php"
+	 * on these POST forms strips the page query arg WordPress needs to
 	 * route the submission to this page's own load-{hook} handler -
 	 * maybe_handle_post() never runs, and admin.php renders a blank
 	 * response. None of the process_*() unit tests above catch this,
