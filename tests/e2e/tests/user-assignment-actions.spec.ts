@@ -3,11 +3,12 @@ import { test, expect } from '@playwright/test';
 
 /**
  * Covers the state-changing actions on User Assignment's Details and Add
- * Groups views (#61/#62), plus the Sync control (#83) - the real gap
- * flagged on #44: neither of these action flows had any e2e coverage
- * before this file, which is exactly why #78 (forms rendering a blank
- * page on submit) and the dev/e2e mock's missing directadd/removemember
- * support both slipped past CI.
+ * Groups views (#61/#62), the Sync control (#83), and the group-owner
+ * parent-removal safeguard (#89) - the real gap flagged on #44: neither
+ * of these action flows had any e2e coverage before this file, which is
+ * exactly why #78 (forms rendering a blank page on submit) and the
+ * dev/e2e mock's missing directadd/removemember support both slipped
+ * past CI.
  *
  * Deliberately scoped to the *queued* redirect+notice only, never to a
  * queued job's actual async completion - Action Scheduler's own
@@ -47,6 +48,17 @@ function resetMemberIndex(): void {
 function seedGroup( email: string, displayName: string, subgroupId: number, subgroupSlug: string, subgroupTitle: string ): void {
 	wpEval(
 		`\\BITS\\GroupsIOSync\\MemberIndex::apply_add( 0, '${ email }', '${ displayName }', ${ subgroupId }, '${ subgroupSlug }', '${ subgroupTitle }', 1 );`
+	);
+}
+
+// apply_add() has no is_owner parameter (that flag only ever comes from a
+// real sync() reading get_members()'s mod_status) - so marking a seeded row
+// as the owner needs a direct write against the table, matching how
+// resetMemberIndex() also reaches straight into $wpdb for the same reason.
+function markOwnerOfParent( email: string ): void {
+	wpEval(
+		'global $wpdb; ' +
+			`$wpdb->update( \\BITS\\GroupsIOSync\\MemberIndex::table_name(), array( 'is_owner' => 1 ), array( 'email' => '${ email }', 'subgroup_slug' => '${ PARENT_SLUG }' ) );`
 	);
 }
 
@@ -105,6 +117,40 @@ test.describe( 'User Assignment Details/Add Groups actions', () => {
 
 		await expect( page ).not.toHaveURL( /confirm_remove_parent=/ );
 		await expect( page.getByRole( 'checkbox', { name: new RegExp( PARENT_SLUG ) } ) ).toBeVisible();
+	} );
+
+	test( 'checking the parent group for the group owner is blocked outright, with no confirmation step', async ( { page } ) => {
+		const email = 'e2e-owner-remove-target@example.test';
+		seedGroup( email, 'E2E Owner Target', 500008, PARENT_SLUG, '' );
+		markOwnerOfParent( email );
+
+		await page.goto( `/wp-admin/admin.php?page=bits-groupsio-user-assignment&view=details&member=${ encodeURIComponent( email ) }` );
+
+		await page.getByRole( 'checkbox', { name: new RegExp( PARENT_SLUG ) } ).check();
+		await page.getByRole( 'button', { name: 'Remove Selected' } ).click();
+
+		await expect( page ).toHaveURL( /bits_notice=owner_removal_blocked/ );
+		await expect( page ).not.toHaveURL( /confirm_remove_parent=/ );
+		await expect( page.getByText( "The group owner can't be removed from the parent group." ) ).toBeVisible();
+
+		// Confirm nothing was actually queued: the parent row is still
+		// present and still checkable, not silently dropped from the list.
+		await expect( page.getByRole( 'checkbox', { name: new RegExp( PARENT_SLUG ) } ) ).toBeVisible();
+	} );
+
+	test( 'the owner-removal safeguard is scoped to the parent group only - removing the owner from a subgroup is still allowed', async ( { page } ) => {
+		const email = 'e2e-owner-subgroup-remove-target@example.test';
+		seedGroup( email, 'E2E Owner Subgroup Target', 500009, PARENT_SLUG, '' );
+		seedGroup( email, 'E2E Owner Subgroup Target', 500010, `${ PARENT_SLUG }+e2e-owner-list`, 'E2E Owner List' );
+		markOwnerOfParent( email );
+
+		await page.goto( `/wp-admin/admin.php?page=bits-groupsio-user-assignment&view=details&member=${ encodeURIComponent( email ) }` );
+
+		await page.getByRole( 'checkbox', { name: /E2E Owner List/i } ).check();
+		await page.getByRole( 'button', { name: 'Remove Selected' } ).click();
+
+		await expect( page ).toHaveURL( /bits_notice=removed_queued/ );
+		await expect( page.getByText( '1 group removal(s) queued.' ) ).toBeVisible();
 	} );
 
 	test( 'Add Selected on the Add Groups view redirects to Details with a queued confirmation', async ( { page } ) => {
