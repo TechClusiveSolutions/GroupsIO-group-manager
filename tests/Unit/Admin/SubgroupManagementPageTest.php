@@ -3,6 +3,7 @@
 namespace BITS\GroupsIOSync\Tests\Unit\Admin;
 
 use BITS\GroupsIOSync\Admin\SubgroupManagementPage;
+use BITS\GroupsIOSync\QueuedExecutionEngine;
 use WP_UnitTestCase;
 
 final class SubgroupManagementPageTest extends WP_UnitTestCase {
@@ -889,5 +890,69 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'Could not access Groups.io', $output );
 		$this->assertStringNotContainsString( 'Create new subgroup', $output );
 		$this->assert_queue_exhausted();
+	}
+
+	// -------------------- Sync control --------------------
+
+	public function test_list_view_shows_the_sync_button(): void {
+		$this->queue_responses( array(
+			$this->json_response( 200, array( 'id' => 999, 'email_address' => 'main@perception-is-all.groups.io' ) ),
+			$this->subgroups_list_response( array() ),
+		) );
+
+		ob_start();
+		SubgroupManagementPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'bits_groupsio_action" value="sync"', $output );
+	}
+
+	public function test_create_view_shows_the_sync_button_with_view_context(): void {
+		$_GET['view'] = 'create';
+
+		ob_start();
+		SubgroupManagementPage::render();
+		$output = ob_get_clean();
+
+		unset( $_GET['view'] );
+
+		$this->assertStringContainsString( 'bits_groupsio_action" value="sync"', $output );
+		$this->assertStringContainsString( 'name="sync_view" value="create"', $output );
+	}
+
+	public function test_details_view_shows_the_sync_button_with_view_and_subgroup_id_context(): void {
+		$_GET['view']        = 'details';
+		$_GET['subgroup_id'] = '152360';
+
+		$this->queue_responses( array(
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 152360, 'perception-is-all+sociology', 'Sociology Club', 'A description.', 1 ),
+			) ),
+			$this->json_response( 200, array( 'object' => 'list', 'data' => array() ) ),
+		) );
+
+		ob_start();
+		SubgroupManagementPage::render();
+		$output = ob_get_clean();
+
+		unset( $_GET['view'], $_GET['subgroup_id'] );
+
+		$this->assertStringContainsString( 'bits_groupsio_action" value="sync"', $output );
+		$this->assertStringContainsString( 'name="sync_view" value="details"', $output );
+		$this->assertStringContainsString( 'name="subgroup_id" value="152360"', $output );
+	}
+
+	public function test_process_sync_processes_due_jobs(): void {
+		QueuedExecutionEngine::queue_remove( 'sync-target@example.test', 900010, 1 );
+
+		$_POST['sync_view']   = 'list';
+		$_POST['_wpnonce']    = wp_create_nonce( 'bits_groupsio_sync' );
+		$_REQUEST['_wpnonce'] = $_POST['_wpnonce'];
+
+		$processed = SubgroupManagementPage::process_sync();
+
+		unset( $_POST['sync_view'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertGreaterThanOrEqual( 1, $processed );
 	}
 }

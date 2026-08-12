@@ -4,6 +4,7 @@ namespace BITS\GroupsIOSync\Tests\Unit\Admin;
 
 use BITS\GroupsIOSync\Admin\UserAssignmentPage;
 use BITS\GroupsIOSync\MemberIndex;
+use BITS\GroupsIOSync\QueuedExecutionEngine;
 use WP_UnitTestCase;
 
 /**
@@ -641,5 +642,59 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 
 		$this->assertStringContainsString( '<form method="post">', $output );
 		$this->assertStringNotContainsString( 'method="post" action=', $output );
+	}
+
+	public function test_list_view_shows_the_sync_button(): void {
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'bits_groupsio_action" value="sync"', $output );
+	}
+
+	public function test_details_view_shows_the_sync_button_with_view_and_member_context(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+
+		$_GET['view']   = 'details';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'bits_groupsio_action" value="sync"', $output );
+		$this->assertStringContainsString( 'name="sync_view" value="details"', $output );
+		$this->assertStringContainsString( 'name="member" value="target@example.test"', $output );
+	}
+
+	public function test_add_groups_view_shows_the_sync_button_with_view_and_member_context(): void {
+		$_GET['view']   = 'add-groups';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'bits_groupsio_action" value="sync"', $output );
+		$this->assertStringContainsString( 'name="sync_view" value="add-groups"', $output );
+		$this->assertStringContainsString( 'name="member" value="target@example.test"', $output );
+	}
+
+	public function test_process_sync_processes_due_jobs_and_returns_the_submitted_view_context(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+		QueuedExecutionEngine::queue_remove( 'target@example.test', 1, 1 );
+
+		$_POST['sync_view']   = 'details';
+		$_POST['member']      = 'target@example.test';
+		$_POST['_wpnonce']    = wp_create_nonce( 'bits_groupsio_sync' );
+		$_REQUEST['_wpnonce'] = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_sync();
+
+		unset( $_POST['sync_view'], $_POST['member'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertGreaterThanOrEqual( 1, $result['count'] );
+		$this->assertSame( 'details', $result['view'] );
+		$this->assertSame( 'target@example.test', $result['member'] );
 	}
 }

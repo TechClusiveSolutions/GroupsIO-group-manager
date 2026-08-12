@@ -335,6 +335,29 @@ potentially many subgroups make a fully synchronous request impractical.
     client-side and don't persist dismissal, which isn't sufficient here
     since a plain page-load hides nothing on its own; this queue's records
     must be actively removed once seen, not merely visually hidden.
+* **Manual "Sync" control — added 2026-08-11**: a small "Sync" button
+  (nonce-protected POST, no parameters) appears at the top of every
+  Subgroup Management view (List, Create, Details) and every User
+  Assignment view (List, Details, Add Groups), letting an admin force
+  Action Scheduler to process any currently-due queued jobs immediately
+  from within the request, rather than waiting on WP-Cron's own timing.
+  New `QueuedExecutionEngine::process_due_jobs(): int`, a thin wrapper
+  around Action Scheduler's own `ActionScheduler_QueueRunner::instance()->run()`
+  (the same call WP-Cron itself uses to process due actions) — this
+  project doesn't reimplement queue-draining logic, it only exposes a
+  manual trigger for Action Scheduler's own. Submitting redirects back to
+  the same view with a notice: "N queued action(s) processed." or "No
+  queued actions were due." Not scoped to the current page/member — it
+  processes whatever is globally due, since Action Scheduler has no
+  per-page/per-member job index to filter by, and scoping would add
+  complexity for no real benefit (an admin who wants to confirm one
+  member's action completed can just re-check that member's Details page
+  afterward). On Subgroup Management's pages this only affects *other*
+  pending queued jobs (e.g. from User Assignment) today, since Subgroup
+  Management's own create/update/delete actions remain synchronous
+  (until #50); the control is added there now anyway, per explicit
+  direction, so it's already in place once #50 makes those actions
+  queued too.
 
 ### 9. Admin Pages: Menu Structure
 

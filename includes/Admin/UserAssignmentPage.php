@@ -59,6 +59,7 @@ final class UserAssignmentPage {
 	private const NONCE_ACTION_CONFIRM_PARENT_REMOVE = 'bits_groupsio_confirm_parent_remove';
 	private const NONCE_ACTION_CLEAR_OVERRIDE        = 'bits_groupsio_clear_override';
 	private const NONCE_ACTION_ADD_SELECTED          = 'bits_groupsio_add_selected';
+	private const NONCE_ACTION_SYNC                  = 'bits_groupsio_sync';
 
 	/**
 	 * Returns this page's fixed notice vocabulary as {code: [type,
@@ -73,6 +74,9 @@ final class UserAssignmentPage {
 			/* translators: %s: number of group additions queued. */
 			'added_queued'     => array( 'success', __( '%s group addition(s) queued.', 'bits-groupsio-sync' ) ),
 			'override_cleared' => array( 'success', __( 'Override cleared.', 'bits-groupsio-sync' ) ),
+			/* translators: %s: number of queued actions processed. */
+			'jobs_processed'   => array( 'success', __( '%s queued action(s) processed.', 'bits-groupsio-sync' ) ),
+			'no_jobs_due'      => array( 'success', __( 'No queued actions were due.', 'bits-groupsio-sync' ) ),
 			'invalid_request'  => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
 		);
 	}
@@ -135,6 +139,11 @@ final class UserAssignmentPage {
 					$result['invalid'] ? 'invalid_request' : 'added_queued',
 					$result['invalid'] ? '' : (string) $result['queued_count']
 				);
+				return;
+			}
+
+			if ( 'sync' === $action ) {
+				self::redirect_after_sync( self::process_sync() );
 				return;
 			}
 
@@ -318,6 +327,30 @@ final class UserAssignmentPage {
 	}
 
 	/**
+	 * The redirect-free half of "Sync" handling: verifies the nonce and
+	 * forces Action Scheduler to process any currently-due queued jobs
+	 * immediately (QueuedExecutionEngine::process_due_jobs()). Not scoped
+	 * to the current member/view - it processes whatever is globally
+	 * due. The submitted view/member round-trip back through the
+	 * redirect purely so the admin lands back on the view they were on,
+	 * not because the sync itself is scoped by them.
+	 *
+	 * @return array{count: int, view: string, member: string}
+	 */
+	public static function process_sync(): array {
+		check_admin_referer( self::NONCE_ACTION_SYNC );
+
+		$view   = isset( $_POST['sync_view'] ) ? sanitize_key( wp_unslash( $_POST['sync_view'] ) ) : '';
+		$member = isset( $_POST['member'] ) ? sanitize_email( wp_unslash( $_POST['member'] ) ) : '';
+
+		return array(
+			'count'  => QueuedExecutionEngine::process_due_jobs(),
+			'view'   => $view,
+			'member' => $member,
+		);
+	}
+
+	/**
 	 * The redirect-free half of "Clear override" handling: verifies the
 	 * nonce and, if a member/subgroup id pair was actually supplied,
 	 * clears that row's sticky override flag. Deliberately does not
@@ -372,10 +405,38 @@ final class UserAssignmentPage {
 			self::render_add_groups_view( $email );
 		} else {
 			echo '<h1>' . esc_html__( 'User Assignment', 'bits-groupsio-sync' ) . '</h1>';
+			self::render_sync_button( '' );
+			self::render_notice();
 			self::render_list_view();
 		}
 
 		echo '</div>';
+	}
+
+	/**
+	 * Renders the "Sync" control: a small nonce-protected POST button
+	 * that forces Action Scheduler to process any currently-due queued
+	 * jobs immediately (QueuedExecutionEngine::process_due_jobs()),
+	 * rather than waiting on WP-Cron's own timing. Not scoped to the
+	 * current view/member - it processes whatever is globally due; the
+	 * view/member are only carried through so the redirect lands back
+	 * on the same view. Per subgroup-crud-and-admin-pages-design.md
+	 * section 8.
+	 *
+	 * @param string $view   Current view ('' for the List view, self::VIEW_DETAILS, or self::VIEW_ADD_GROUPS).
+	 * @param string $member Current member's email address, if on the Details or Add Groups view.
+	 * @return void
+	 */
+	private static function render_sync_button( string $view, string $member = '' ): void {
+		echo '<form method="post">';
+		wp_nonce_field( self::NONCE_ACTION_SYNC );
+		echo '<input type="hidden" name="bits_groupsio_action" value="sync" />';
+		printf( '<input type="hidden" name="sync_view" value="%s" />', esc_attr( $view ) );
+		if ( '' !== $member ) {
+			printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $member ) );
+		}
+		submit_button( __( 'Sync', 'bits-groupsio-sync' ), 'secondary', 'submit', false );
+		echo '</form>';
 	}
 
 	/**
@@ -553,6 +614,7 @@ final class UserAssignmentPage {
 			esc_html__( 'Back to User Assignment', 'bits-groupsio-sync' )
 		);
 
+		self::render_sync_button( self::VIEW_DETAILS, $email );
 		self::render_notice();
 
 		if ( '' === $email ) {
@@ -910,6 +972,7 @@ final class UserAssignmentPage {
 			esc_html__( 'Back to Details', 'bits-groupsio-sync' )
 		);
 
+		self::render_sync_button( self::VIEW_ADD_GROUPS, $email );
 		self::render_notice();
 
 		if ( '' === $email ) {
@@ -1159,6 +1222,32 @@ final class UserAssignmentPage {
 		}
 
 		wp_safe_redirect( add_query_arg( $args, self::details_url( $email ) ) );
+		exit;
+	}
+
+	/**
+	 * Redirects back to whichever view the "Sync" button was submitted
+	 * from (List, Details, or Add Groups), with a notice reporting how
+	 * many queued actions were processed.
+	 *
+	 * @param array{count: int, view: string, member: string} $result process_sync()'s return value.
+	 * @return void
+	 * @codeCoverageIgnore Calls exit; cannot run inside the test process. Its pure input-building logic is trivial (array literal + add_query_arg).
+	 */
+	private static function redirect_after_sync( array $result ): void {
+		$target = self::list_url();
+		if ( self::VIEW_DETAILS === $result['view'] && '' !== $result['member'] ) {
+			$target = self::details_url( $result['member'] );
+		} elseif ( self::VIEW_ADD_GROUPS === $result['view'] && '' !== $result['member'] ) {
+			$target = self::add_groups_url( $result['member'] );
+		}
+
+		$args = array( 'bits_notice' => $result['count'] > 0 ? 'jobs_processed' : 'no_jobs_due' );
+		if ( $result['count'] > 0 ) {
+			$args['bits_notice_detail'] = (string) $result['count'];
+		}
+
+		wp_safe_redirect( add_query_arg( $args, $target ) );
 		exit;
 	}
 
