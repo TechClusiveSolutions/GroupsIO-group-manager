@@ -642,4 +642,62 @@ final class MemberIndexTest extends WP_UnitTestCase {
 	public function test_find_group_by_slug_returns_null_when_never_indexed(): void {
 		$this->assertNull( MemberIndex::find_group_by_slug( 'perception-is-all+never-synced' ) );
 	}
+
+	public function test_sync_captures_is_owner_from_mod_status(): void {
+		$this->queue_responses( array(
+			$this->group_response( 900001, 'perception-is-all' ),
+			$this->members_list_response( array(
+				array_merge( $this->member_row( 'owner@example.test' ), array( 'mod_status' => 'sub_modstatus_owner' ) ),
+				array_merge( $this->member_row( 'plain-member@example.test' ), array( 'mod_status' => 'sub_modstatus_none' ) ),
+			) ),
+			$this->subgroups_list_response( array() ),
+		) );
+
+		MemberIndex::sync();
+
+		$owner_row = $this->fetch_row( 'owner@example.test', 900001 );
+		$plain_row = $this->fetch_row( 'plain-member@example.test', 900001 );
+
+		$this->assertSame( '1', $owner_row['is_owner'] );
+		$this->assertSame( '0', $plain_row['is_owner'] );
+	}
+
+	public function test_is_owner_of_parent_returns_true_for_the_parent_rows_owner_flag(): void {
+		global $wpdb;
+
+		$wpdb->insert( MemberIndex::table_name(), array(
+			'email' => 'owner@example.test', 'subgroup_id' => 1, 'subgroup_slug' => 'perception-is-all',
+			'is_owner' => 1, 'synced_at' => current_time( 'mysql', true ),
+		) );
+
+		$this->assertTrue( MemberIndex::is_owner_of_parent( 'owner@example.test' ) );
+	}
+
+	public function test_is_owner_of_parent_returns_false_for_a_non_owner(): void {
+		global $wpdb;
+
+		$wpdb->insert( MemberIndex::table_name(), array(
+			'email' => 'plain@example.test', 'subgroup_id' => 1, 'subgroup_slug' => 'perception-is-all',
+			'is_owner' => 0, 'synced_at' => current_time( 'mysql', true ),
+		) );
+
+		$this->assertFalse( MemberIndex::is_owner_of_parent( 'plain@example.test' ) );
+	}
+
+	public function test_is_owner_of_parent_ignores_owner_flag_on_a_subgroup_row(): void {
+		global $wpdb;
+
+		// Owner of a subgroup only, not the parent group itself - should
+		// not count as the group's overall owner.
+		$wpdb->insert( MemberIndex::table_name(), array(
+			'email' => 'sub-owner@example.test', 'subgroup_id' => 2, 'subgroup_slug' => 'perception-is-all+list',
+			'is_owner' => 1, 'synced_at' => current_time( 'mysql', true ),
+		) );
+
+		$this->assertFalse( MemberIndex::is_owner_of_parent( 'sub-owner@example.test' ) );
+	}
+
+	public function test_is_owner_of_parent_returns_false_when_never_indexed(): void {
+		$this->assertFalse( MemberIndex::is_owner_of_parent( 'nobody@example.test' ) );
+	}
 }
