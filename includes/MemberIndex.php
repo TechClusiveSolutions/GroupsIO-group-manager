@@ -77,6 +77,7 @@ final class MemberIndex {
 			subgroup_title VARCHAR(255) NOT NULL DEFAULT '',
 			member_info_id BIGINT UNSIGNED NULL,
 			pmpro_expected TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
+			is_owner TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
 			override_type VARCHAR(20) NULL,
 			override_by BIGINT UNSIGNED NULL,
 			override_at DATETIME NULL,
@@ -210,7 +211,8 @@ final class MemberIndex {
 				$subgroup_slug,
 				$subgroup_title,
 				isset( $member['id'] ) ? (int) $member['id'] : null,
-				self::is_expected( $user_id, $subgroup_slug )
+				self::is_expected( $user_id, $subgroup_slug ),
+				'sub_modstatus_owner' === ( $member['mod_status'] ?? '' )
 			);
 		}
 	}
@@ -262,6 +264,7 @@ final class MemberIndex {
 	 * @param string   $subgroup_title Cosmetic title, if any.
 	 * @param int|null $member_info_id Groups.io's per-membership-record id for this (email, subgroup) pairing, or null if unknown.
 	 * @param bool     $pmpro_expected Whether this pairing is PMPro-expected.
+	 * @param bool     $is_owner       Whether this row's mod_status from get_members() is 'sub_modstatus_owner'.
 	 * @return void
 	 */
 	private static function upsert_row(
@@ -272,7 +275,8 @@ final class MemberIndex {
 		string $subgroup_slug,
 		string $subgroup_title,
 		?int $member_info_id,
-		bool $pmpro_expected
+		bool $pmpro_expected,
+		bool $is_owner = false
 	): void {
 		global $wpdb;
 
@@ -289,8 +293,8 @@ final class MemberIndex {
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is our own fixed table name (self::table_name()); $member_info_id_sql is either the literal 'NULL' or a cast-to-string int, not user input. Both are interpolated across this multi-line SQL string, so the ignore is scoped to the whole statement below rather than a single line.
 		$sql = $wpdb->prepare(
 			"INSERT INTO $table
-			(user_id, email, display_name, subgroup_id, subgroup_slug, subgroup_title, member_info_id, pmpro_expected, synced_at)
-			VALUES (%d, %s, %s, %d, %s, %s, $member_info_id_sql, %d, %s)
+			(user_id, email, display_name, subgroup_id, subgroup_slug, subgroup_title, member_info_id, pmpro_expected, is_owner, synced_at)
+			VALUES (%d, %s, %s, %d, %s, %s, $member_info_id_sql, %d, %d, %s)
 			ON DUPLICATE KEY UPDATE
 				user_id = VALUES(user_id),
 				display_name = VALUES(display_name),
@@ -298,6 +302,7 @@ final class MemberIndex {
 				subgroup_title = VALUES(subgroup_title),
 				member_info_id = VALUES(member_info_id),
 				pmpro_expected = VALUES(pmpro_expected),
+				is_owner = VALUES(is_owner),
 				synced_at = VALUES(synced_at)",
 			$user_id,
 			$email,
@@ -306,6 +311,7 @@ final class MemberIndex {
 			$subgroup_slug,
 			$subgroup_title,
 			$pmpro_expected ? 1 : 0,
+			$is_owner ? 1 : 0,
 			current_time( 'mysql', true )
 		);
 		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
@@ -477,6 +483,39 @@ final class MemberIndex {
 		);
 
 		return null === $value ? null : (int) $value;
+	}
+
+	/**
+	 * Whether a member is the group's owner, per the parent group's own
+	 * indexed row's is_owner flag (captured from get_members()'s
+	 * mod_status field during sync() - see upsert_row()). Used by
+	 * UserAssignmentPage to refuse to queue removing the owner from the
+	 * parent group. Deliberately keyed off the *parent* row specifically
+	 * (not any subgroup row) - ownership is a property of the parent
+	 * group; a member could carry moderator/owner status on an
+	 * individual subgroup without being the actual group owner. Returns
+	 * false (not "unknown") if the parent row has never been indexed
+	 * yet, matching this safeguard's fail-closed-on-the-allow-side
+	 * posture being irrelevant here - a never-synced parent row can't
+	 * belong to a real owner in the first place.
+	 *
+	 * @param string $email Member's email address.
+	 * @return bool
+	 */
+	public static function is_owner_of_parent( string $email ): bool {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- this table isn't object-cached, matching AuditLog's own uncached direct-write convention.
+		$is_owner = $wpdb->get_var(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- self::table_name() is our own fixed table name, not user input.
+				'SELECT is_owner FROM ' . self::table_name() . ' WHERE email = %s AND subgroup_slug = %s',
+				$email,
+				self::parent_group()
+			)
+		);
+
+		return '1' === $is_owner;
 	}
 
 	/**

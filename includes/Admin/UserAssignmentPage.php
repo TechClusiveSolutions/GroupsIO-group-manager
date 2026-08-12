@@ -70,14 +70,15 @@ final class UserAssignmentPage {
 	private static function notices(): array {
 		return array(
 			/* translators: %s: number of group removals queued. */
-			'removed_queued'   => array( 'success', __( '%s group removal(s) queued.', 'bits-groupsio-sync' ) ),
+			'removed_queued'        => array( 'success', __( '%s group removal(s) queued.', 'bits-groupsio-sync' ) ),
 			/* translators: %s: number of group additions queued. */
-			'added_queued'     => array( 'success', __( '%s group addition(s) queued.', 'bits-groupsio-sync' ) ),
-			'override_cleared' => array( 'success', __( 'Override cleared.', 'bits-groupsio-sync' ) ),
+			'added_queued'          => array( 'success', __( '%s group addition(s) queued.', 'bits-groupsio-sync' ) ),
+			'override_cleared'      => array( 'success', __( 'Override cleared.', 'bits-groupsio-sync' ) ),
 			/* translators: %s: number of queued actions processed. */
-			'jobs_processed'   => array( 'success', __( '%s queued action(s) processed.', 'bits-groupsio-sync' ) ),
-			'no_jobs_due'      => array( 'success', __( 'No queued actions were due.', 'bits-groupsio-sync' ) ),
-			'invalid_request'  => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
+			'jobs_processed'        => array( 'success', __( '%s queued action(s) processed.', 'bits-groupsio-sync' ) ),
+			'no_jobs_due'           => array( 'success', __( 'No queued actions were due.', 'bits-groupsio-sync' ) ),
+			'invalid_request'       => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
+			'owner_removal_blocked' => array( 'error', __( "The group owner can't be removed from the parent group.", 'bits-groupsio-sync' ) ),
 		);
 	}
 
@@ -105,6 +106,16 @@ final class UserAssignmentPage {
 			if ( 'remove_selected' === $action ) {
 				$result = self::process_remove_selected();
 
+				// Owner-block takes priority over reporting a partial
+				// "N queued" success - it's the more important message
+				// for the admin to see, and a checked owner-parent-row-plus-
+				// other-groups submission is a rare edge case, not the
+				// everyday flow this notice text is optimized for.
+				if ( $result['owner_blocked'] ) {
+					self::redirect_with_notice( $result['email'], 'owner_removal_blocked' );
+					return;
+				}
+
 				if ( $result['invalid'] ) {
 					self::redirect_with_notice( $result['email'], 'invalid_request' );
 					return;
@@ -124,6 +135,12 @@ final class UserAssignmentPage {
 
 			if ( 'confirm_parent_remove' === $action ) {
 				$result = self::process_confirm_parent_remove();
+
+				if ( $result['owner_blocked'] ) {
+					self::redirect_with_notice( $result['email'], 'owner_removal_blocked' );
+					return;
+				}
+
 				self::redirect_with_notice(
 					$result['email'],
 					$result['invalid'] ? 'invalid_request' : 'removed_queued',
@@ -172,11 +189,16 @@ final class UserAssignmentPage {
 	 * group. If the parent-group row is among the checked ids, its job
 	 * is deliberately *not* queued here - the caller shows an inline
 	 * confirmation step first (see render_parent_removal_confirmation()),
-	 * per section 12's parent-removal semantics. Kept separate from
+	 * per section 12's parent-removal semantics. **Exception**: if the
+	 * member is the group's owner (`MemberIndex::is_owner_of_parent()`),
+	 * the parent row is refused outright instead - no confirmation step
+	 * is shown at all, and `owner_blocked` is set so the caller can
+	 * surface a distinct notice. Non-parent rows checked alongside the
+	 * owner's parent row still queue normally. Kept separate from
 	 * maybe_handle_post() purely so this branch is unit testable without
 	 * terminating the test process.
 	 *
-	 * @return array{queued_count: int, parent_id: int, email: string, invalid: bool}
+	 * @return array{queued_count: int, parent_id: int, owner_blocked: bool, email: string, invalid: bool}
 	 */
 	public static function process_remove_selected(): array {
 		check_admin_referer( self::NONCE_ACTION_REMOVE_SELECTED );
@@ -188,10 +210,11 @@ final class UserAssignmentPage {
 
 		if ( '' === $email || empty( $checked ) ) {
 			return array(
-				'queued_count' => 0,
-				'parent_id'    => 0,
-				'email'        => $email,
-				'invalid'      => true,
+				'queued_count'  => 0,
+				'parent_id'     => 0,
+				'owner_blocked' => false,
+				'email'         => $email,
+				'invalid'       => true,
 			);
 		}
 
@@ -200,6 +223,7 @@ final class UserAssignmentPage {
 		$admin_user_id = get_current_user_id();
 		$queued_count  = 0;
 		$parent_id     = 0;
+		$owner_blocked = false;
 
 		foreach ( $groups as $group ) {
 			if ( ! in_array( $group['subgroup_id'], $checked, true ) ) {
@@ -207,7 +231,11 @@ final class UserAssignmentPage {
 			}
 
 			if ( $parent_slug === $group['subgroup_slug'] ) {
-				$parent_id = $group['subgroup_id'];
+				if ( MemberIndex::is_owner_of_parent( $email ) ) {
+					$owner_blocked = true;
+				} else {
+					$parent_id = $group['subgroup_id'];
+				}
 				continue;
 			}
 
@@ -216,10 +244,11 @@ final class UserAssignmentPage {
 		}
 
 		return array(
-			'queued_count' => $queued_count,
-			'parent_id'    => $parent_id,
-			'email'        => $email,
-			'invalid'      => 0 === $queued_count && 0 === $parent_id,
+			'queued_count'  => $queued_count,
+			'parent_id'     => $parent_id,
+			'owner_blocked' => $owner_blocked,
+			'email'         => $email,
+			'invalid'       => 0 === $queued_count && 0 === $parent_id && ! $owner_blocked,
 		);
 	}
 
@@ -227,10 +256,14 @@ final class UserAssignmentPage {
 	 * The redirect-free half of confirming a parent-group removal:
 	 * verifies the nonce, then re-validates the submitted subgroup id is
 	 * both one of this member's own indexed rows and actually the
-	 * parent group (never trusting a client-submitted id blindly) before
-	 * queuing the remove job.
+	 * parent group (never trusting a client-submitted id blindly)
+	 * before queuing the remove job. Independently re-checks
+	 * `MemberIndex::is_owner_of_parent()` here too, rather than trusting
+	 * process_remove_selected()'s earlier check alone - defense in
+	 * depth against the member's owner status changing between the two
+	 * requests (e.g. a re-sync completing in between).
 	 *
-	 * @return array{email: string, invalid: bool}
+	 * @return array{email: string, invalid: bool, owner_blocked: bool}
 	 */
 	public static function process_confirm_parent_remove(): array {
 		check_admin_referer( self::NONCE_ACTION_CONFIRM_PARENT_REMOVE );
@@ -240,8 +273,9 @@ final class UserAssignmentPage {
 
 		if ( '' === $email || 0 === $subgroup_id ) {
 			return array(
-				'email'   => $email,
-				'invalid' => true,
+				'email'         => $email,
+				'invalid'       => true,
+				'owner_blocked' => false,
 			);
 		}
 
@@ -258,16 +292,26 @@ final class UserAssignmentPage {
 
 		if ( ! $is_parent ) {
 			return array(
-				'email'   => $email,
-				'invalid' => true,
+				'email'         => $email,
+				'invalid'       => true,
+				'owner_blocked' => false,
+			);
+		}
+
+		if ( MemberIndex::is_owner_of_parent( $email ) ) {
+			return array(
+				'email'         => $email,
+				'invalid'       => false,
+				'owner_blocked' => true,
 			);
 		}
 
 		QueuedExecutionEngine::queue_remove( $email, $subgroup_id, get_current_user_id() );
 
 		return array(
-			'email'   => $email,
-			'invalid' => false,
+			'email'         => $email,
+			'invalid'       => false,
+			'owner_blocked' => false,
 		);
 	}
 

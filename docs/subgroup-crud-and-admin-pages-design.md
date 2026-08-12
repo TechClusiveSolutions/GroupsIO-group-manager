@@ -223,7 +223,10 @@ subgroup on every page load or search.
   table is what the UI actually queries, so storing the flag alongside the
   membership row it applies to avoids a join), `override_by` (admin user
   id), `override_at` (datetime), `synced_at` (datetime, last confirmed
-  against live Groups.io).
+  against live Groups.io), `is_owner` (bool, added 2026-08-12 — whether
+  this `(email, subgroup)` row's `mod_status` from `get_members()` is
+  `sub_modstatus_owner`, per the confirmed live API contract; see the
+  "Owner-removal safeguard" bullet below).
 * **Sync job**: calls `get_subgroups()` then `get_members()` per subgroup,
   upserting rows to reflect actual current membership, and recomputing
   `pmpro_expected` per row. This is the first place the PMPro-expected-set
@@ -248,6 +251,21 @@ subgroup on every page load or search.
   8) touch Groups.io directly for User Assignment purposes — the List,
   Details, and Add Groups pages (section 12) all read from this local
   table, never live-aggregating across subgroups on a page load.
+* **Owner-removal safeguard — added 2026-08-12**: `sync_subgroup()` now
+  also captures each member row's `mod_status` field from
+  `get_members()`'s response (confirmed via the live API reference —
+  `sub_modstatus_owner` identifies the group's owner, distinct from
+  `sub_modstatus_moderator`/`sub_modstatus_none`) into the new
+  `is_owner` column. The User Assignment Details page (section 12) uses
+  this to explicitly refuse to queue removing the owner from the
+  *parent* group specifically — not from an individual subgroup, which
+  remains allowed — since removing the owner from the parent group per
+  section 12's own existing semantics removes them from BITS' entire
+  Groups.io presence, an outcome that should never be reachable via a
+  UI action regardless of what Groups.io's own API would actually do if
+  asked (that behavior is unverified and out of scope for this
+  safeguard to depend on — the block applies unconditionally, not only
+  when the live API would also reject it).
 
 ### 7. Audit Log Recording — `AuditLog::record()`
 
@@ -488,7 +506,16 @@ organized and how actions execute, not what the page is fundamentally for.
     2026-08-09 that this action is intentionally allowed from this page,
     but only behind that explicit warning. Non-parent rows checked
     alongside the parent still queue immediately; only the parent row's
-    job waits on the confirmation.
+    job waits on the confirmation. **Exception, added 2026-08-12**: if
+    the member is the group's owner (`MemberIndex`'s new `is_owner`
+    column - section 6), the parent-group row is refused outright
+    rather than shown the confirmation step - a distinct
+    `owner_removal_blocked` notice explains why, and no job is ever
+    queued for it. Re-checked independently both when "Remove Selected"
+    is first submitted and again if the confirmation step's own "Yes"
+    is submitted, rather than trusted from the first check alone.
+    Non-parent rows checked alongside the owner's parent row still
+    queue normally - only the parent row is blocked.
   * "Clear override" control per row carrying an override flag, releasing
     it back to normal automated management. Synchronous (a normal POST
     handled on this page's own `load-{hook}` action, redirecting back to

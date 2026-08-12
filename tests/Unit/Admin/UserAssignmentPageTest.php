@@ -717,4 +717,91 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		$this->assertSame( 'details', $result['view'] );
 		$this->assertSame( 'target@example.test', $result['member'] );
 	}
+
+	public function test_process_remove_selected_blocks_removing_the_owner_from_the_parent_group(): void {
+		global $wpdb;
+
+		MemberIndex::apply_add( 0, 'owner@example.test', 'Owner', 1, 'perception-is-all', '', 1 );
+		$wpdb->update(
+			MemberIndex::table_name(),
+			array( 'is_owner' => 1 ),
+			array( 'email' => 'owner@example.test', 'subgroup_id' => 1 )
+		);
+
+		$_POST['member']       = 'owner@example.test';
+		$_POST['subgroup_ids'] = array( '1' );
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_remove_selected' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_remove_selected();
+
+		unset( $_POST['member'], $_POST['subgroup_ids'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertTrue( $result['owner_blocked'] );
+		$this->assertSame( 0, $result['parent_id'], 'The owner must never be shown the confirmation step at all.' );
+		$this->assertFalse( $result['invalid'], 'owner_blocked is a distinct outcome from a plain invalid request.' );
+	}
+
+	public function test_process_remove_selected_still_queues_non_parent_groups_when_owner_blocked(): void {
+		global $wpdb;
+
+		MemberIndex::apply_add( 0, 'owner@example.test', 'Owner', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'owner@example.test', 'Owner', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		$wpdb->update(
+			MemberIndex::table_name(),
+			array( 'is_owner' => 1 ),
+			array( 'email' => 'owner@example.test', 'subgroup_id' => 1 )
+		);
+
+		$_POST['member']       = 'owner@example.test';
+		$_POST['subgroup_ids'] = array( '1', '2' );
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_remove_selected' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_remove_selected();
+
+		unset( $_POST['member'], $_POST['subgroup_ids'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertTrue( $result['owner_blocked'] );
+		$this->assertSame( 1, $result['queued_count'], 'The non-parent row must still queue normally.' );
+	}
+
+	public function test_process_confirm_parent_remove_blocks_the_owner_as_defense_in_depth(): void {
+		global $wpdb;
+
+		MemberIndex::apply_add( 0, 'owner@example.test', 'Owner', 1, 'perception-is-all', '', 1 );
+		$wpdb->update(
+			MemberIndex::table_name(),
+			array( 'is_owner' => 1 ),
+			array( 'email' => 'owner@example.test', 'subgroup_id' => 1 )
+		);
+
+		$_POST['member']      = 'owner@example.test';
+		$_POST['subgroup_id'] = '1';
+		$_POST['_wpnonce']    = wp_create_nonce( 'bits_groupsio_confirm_parent_remove' );
+		$_REQUEST['_wpnonce'] = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_confirm_parent_remove();
+
+		unset( $_POST['member'], $_POST['subgroup_id'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertTrue( $result['owner_blocked'] );
+		$this->assertFalse( $result['invalid'] );
+	}
+
+	public function test_process_remove_selected_allows_removing_a_non_owner_from_the_parent_group(): void {
+		MemberIndex::apply_add( 0, 'plain@example.test', 'Plain', 1, 'perception-is-all', '', 1 );
+
+		$_POST['member']       = 'plain@example.test';
+		$_POST['subgroup_ids'] = array( '1' );
+		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_remove_selected' );
+		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_remove_selected();
+
+		unset( $_POST['member'], $_POST['subgroup_ids'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertFalse( $result['owner_blocked'] );
+		$this->assertSame( 1, $result['parent_id'], 'A non-owner still goes through the normal confirmation flow.' );
+	}
 }
