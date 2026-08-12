@@ -23,6 +23,7 @@ This document supersedes the earlier working draft (`PmPro-GroupsIO-PRD.md`, ret
 * An admin settings screen for operational configuration (see section 3.3).
 * A passwordless "magic link" mechanism granting full WordPress profile access, per section 5.
 * Basic admin operability: visibility into pending/failed sync jobs, and a kill switch to halt all sync activity.
+* **Added as a further amendment to Phase 3, 2026-08-12**: a "Plugin Configuration" admin page allowing an admin to set the parent group value when `GROUPS_IO_PARENT_GROUP` is not defined in `wp-config.php` (see section 3.1's updated precedence rule); an activation-time admin notice pointing to that page when no parent group is configured by either means; and an "add member" control on Subgroup Management's Details view, searching the local member index (existing tracked/PMPro members only, not arbitrary email addresses) rather than requiring the member-first flow through User Assignment. Full design in `subgroup-crud-and-admin-pages-design.md` sections 11 and 15. A real uninstall/data-cleanup routine was considered alongside this amendment and deliberately deferred — tracked as its own design item in `phase-plan.md`'s Post-v1.0 Backlog, not built here.
 
 #### 2.2 Explicitly out of scope for v1 (backlog)
 
@@ -49,10 +50,13 @@ Defined in the site's `wp-config.php`, following the same convention as core Wor
 
 These values are never stored in the database, never exposed through an admin UI, and never committed to the repository. Only clearly fake placeholder values appear in documentation and examples.
 
+**Exception, added 2026-08-12**: `GROUPS_IO_PARENT_GROUP` may instead be left undefined and set via the admin-editable database-backed fallback described in section 3.2 — the constant, when defined, always takes priority and the fallback field becomes a read-only display of the constant's value in that case. `GROUPS_IO_API_KEY` and `GROUPS_IO_NOTIFICATION_EMAIL` are unaffected by this exception and remain constant-only, since one is the actual production secret and the other has no corresponding admin-page need.
+
 WordPress.com automatically defines `WP_ENVIRONMENT_TYPE=staging` in `wp-config.php` on the Business/Commerce plan's staging site feature. The plugin checks this constant (`wp_get_environment_type() === 'staging'`) before making any real Groups.io API call, and either targets a separate staging/test Groups.io credential (if `GROUPS_IO_API_KEY` is overridden for staging) or refuses to run live sync at all on staging — this is a safeguard against accidentally running real add/remove operations against the production BITS Groups.io group from the staging site during Phase 9 validation. The exact behavior (staging-specific credential vs. refuse-to-run) is an implementation-level decision for the Implementation Standard document.
 
 #### 3.2 Admin-Configurable Settings (database-backed, editable via this plugin's admin UI)
 
+* **Added 2026-08-12**: Parent group fallback — the parent group slug, editable via the new Plugin Configuration admin page only when `GROUPS_IO_PARENT_GROUP` is not defined in `wp-config.php` (section 3.1's exception). Not a general operational setting like the rest of this list; exists purely as a fallback for deployments that haven't set the constant, most notably right after a fresh install (see the activation-notice behavior in `subgroup-crud-and-admin-pages-design.md` section 15).
 * Global mandatory groups — subgroups every active member must belong to, regardless of tier.
 * Level-specific mandatory groups — subgroups tied to a particular PMPro membership level, configured on that level's edit screen.
 * Grace period — the delay, in days, between a membership expiring/being cancelled and the removal job actually executing.
