@@ -764,8 +764,14 @@ final class MemberIndex {
 	/**
 	 * Returns one page of distinct members for the User Assignment List
 	 * page, each as {email, display_name, group_count} - group_count is
-	 * the member's total subgroup-membership count (parent + subgroups)
-	 * across the whole index, not just rows matching a search term. A
+	 * the member's total *currently subscribed* subgroup-membership
+	 * count (parent + subgroups) across the whole index, not just rows
+	 * matching a search term. Excludes any row carrying
+	 * override_type = 'removed', matching get_member_groups()'s own
+	 * "currently subscribed" definition - a member who has been
+	 * manually removed from a group must not still count it here (a
+	 * member removed from everything correctly shows group_count 0, not
+	 * a stale count of rows that no longer reflect real membership). A
 	 * search term matching a subgroup name/slug/title still returns the
 	 * member's full group count, per section 12's "matches against
 	 * member name, email, or subgroup name/slug" acceptance criterion.
@@ -796,7 +802,8 @@ final class MemberIndex {
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- $table is our own fixed table name; $where_sql is a fixed fragment (either the literal '1=1' or search_where()'s placeholder-only output); both are interpolated across this multi-line SQL string, so the disable is scoped to the whole statement, matching upsert_row()'s own convention above.
 		$sql = $wpdb->prepare(
-			"SELECT email, MAX(display_name) AS display_name, COUNT(DISTINCT subgroup_id) AS group_count
+			"SELECT email, MAX(display_name) AS display_name,
+				COUNT(DISTINCT CASE WHEN override_type IS NULL OR override_type != 'removed' THEN subgroup_id END) AS group_count
 			FROM $table
 			WHERE $where_sql
 			GROUP BY email

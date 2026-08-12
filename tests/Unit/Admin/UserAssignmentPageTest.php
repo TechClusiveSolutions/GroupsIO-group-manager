@@ -642,4 +642,24 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		$this->assertStringContainsString( '<form method="post">', $output );
 		$this->assertStringNotContainsString( 'method="post" action=', $output );
 	}
+
+	public function test_details_view_shows_the_add_groups_link_even_with_no_currently_subscribed_groups(): void {
+		// A member manually removed from every group has no rows
+		// get_member_groups() would return, but must still be able to
+		// reach the Add Groups view - this is exactly the case where
+		// that link is most needed.
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_remove( 'target@example.test', 1, 1 );
+
+		$_GET['view']   = 'details';
+		$_GET['member'] = 'target@example.test';
+
+		ob_start();
+		UserAssignmentPage::render();
+		$output = ob_get_clean();
+
+		$this->assertStringContainsString( 'No currently subscribed groups found.', $output );
+		$this->assertStringContainsString( 'view=add-groups', $output );
+		$this->assertStringContainsString( 'Add groups', $output );
+	}
 }

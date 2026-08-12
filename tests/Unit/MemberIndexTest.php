@@ -587,4 +587,29 @@ final class MemberIndexTest extends WP_UnitTestCase {
 		$this->assertCount( 2, $page_two );
 		$this->assertNotSame( $page_one[0]['subgroup_id'], $page_two[0]['subgroup_id'] );
 	}
+
+	public function test_get_members_page_excludes_removed_groups_from_group_count(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', '', 1 );
+
+		$rows = MemberIndex::get_members_page( 1, 20 );
+
+		$this->assertSame( 2, $rows[0]['group_count'], 'Sanity check before removal.' );
+
+		MemberIndex::apply_remove( 'alice@example.test', 2, 1 );
+
+		$rows = MemberIndex::get_members_page( 1, 20 );
+
+		$this->assertSame( 1, $rows[0]['group_count'], 'A manually-removed group must not still count toward the List view\'s group_count.' );
+	}
+
+	public function test_get_members_page_reports_zero_group_count_when_everything_is_removed(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_remove( 'alice@example.test', 1, 1 );
+
+		$rows = MemberIndex::get_members_page( 1, 20 );
+
+		$this->assertCount( 1, $rows, 'A fully-removed member should still appear in the list, not disappear entirely.' );
+		$this->assertSame( 0, $rows[0]['group_count'] );
+	}
 }
