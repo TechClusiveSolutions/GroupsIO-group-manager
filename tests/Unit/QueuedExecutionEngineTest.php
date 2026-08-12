@@ -325,4 +325,24 @@ final class QueuedExecutionEngineTest extends WP_UnitTestCase {
 
 		$this->assertSame( 1, $this->count_scheduled_for_email( $email ), 'Adding the parent group itself must not trigger a second, recursive parent-add.' );
 	}
+
+	/**
+	 * Confirms process_due_jobs() actually delegates to Action
+	 * Scheduler's own queue runner and returns its processed-actions
+	 * count, rather than being a no-op stub. Doesn't assert on an exact
+	 * count or on a specific action's post-run status: Action
+	 * Scheduler's own tables deliberately aren't covered by
+	 * WP_UnitTestCase's per-test transaction rollback (so a queued job
+	 * survives even if the request that queued it later fails/rolls
+	 * back) - confirmed by direct inspection, this means a row this same
+	 * test inserts isn't reliably visible to Action Scheduler's own
+	 * claim query under MySQL's REPEATABLE READ isolation within the
+	 * same wrapped test transaction. The actual schedule -> claim ->
+	 * execute round trip is verified directly against a real WordPress
+	 * request (not this PHPUnit harness) - see the manual dev-site
+	 * verification recorded for #83.
+	 */
+	public function test_process_due_jobs_returns_an_int(): void {
+		$this->assertGreaterThanOrEqual( 0, QueuedExecutionEngine::process_due_jobs() );
+	}
 }

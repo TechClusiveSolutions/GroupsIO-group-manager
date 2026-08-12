@@ -332,6 +332,26 @@ final class QueuedExecutionEngine {
 	}
 
 	/**
+	 * Forces Action Scheduler to process any currently-due queued jobs
+	 * immediately, rather than waiting on WP-Cron's own timing. A thin
+	 * wrapper around Action Scheduler's own queue runner - the same call
+	 * WP-Cron itself uses to process due actions - not a reimplementation
+	 * of queue-draining logic. Not scoped to this plugin's own hook or to
+	 * any particular member/page; it runs whatever Action Scheduler
+	 * considers due, system-wide. Backs the admin-facing "Sync" control
+	 * on the GroupsIO Management pages.
+	 *
+	 * @return int Number of actions processed.
+	 */
+	public static function process_due_jobs(): int {
+		if ( ! class_exists( 'ActionScheduler_QueueRunner' ) ) {
+			return 0;
+		}
+
+		return \ActionScheduler_QueueRunner::instance()->run( 'BITS Groups.io Sync manual trigger' );
+	}
+
+	/**
 	 * Reads the configured parent group slug.
 	 *
 	 * @return string
