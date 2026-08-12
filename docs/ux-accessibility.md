@@ -13,7 +13,11 @@ This document specifies the accessibility standard this project must meet, which
 
 ### 3. UI Surfaces in Scope
 
-* The admin settings screen for operational configuration (mandatory groups, grace period, log retention, kill switch, mass-action anomaly threshold, magic link rate limits, reconciliation dry-run toggle — PRD section 3.2).
+* The GroupsIO Management admin area's three pages (shipped, Phase 3):
+  * **Feature Controls** — operational configuration (mandatory groups, grace period, log retention, kill switch, mass-action anomaly threshold, magic link rate limits, reconciliation dry-run toggle — PRD section 3.2, most still pending later phases).
+  * **Subgroup Management** — the List, Create, and Details views, including the inline delete confirmation.
+  * **User Assignment** — the List, Details, and Add Groups views, including the parent-group removal confirmation step and the owner-removal-blocked notice.
+  * The "Sync" manual-processing control present on every view of all three pages above.
 * The level-specific mandatory groups meta box on the PMPro Edit Membership Level screen.
 * The magic link self-service request form.
 * The mass-action anomaly pending-approval admin UI (Phase 7).
