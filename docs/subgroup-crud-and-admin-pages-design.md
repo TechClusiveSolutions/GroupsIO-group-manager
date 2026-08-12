@@ -407,6 +407,113 @@ potentially many subgroups make a fully synchronous request impractical.
   (until #50); the control is added there now anyway, per explicit
   direction, so it's already in place once #50 makes those actions
   queued too.
+* **Subgroup Management CRUD queuing — added 2026-08-12 (#50/#51)**: a
+  new, separate `SubgroupExecutionEngine` (deliberately not folded into
+  `QueuedExecutionEngine` above — its audit/notification shape is
+  meaningfully different: a subgroup action has no target member email,
+  and per explicit direction below, it notifies on failure only, not
+  every outcome the way User Assignment's engine does) queues
+  Subgroup Management's create/update/delete actions instead of running
+  them synchronously inside the request.
+  * **Why, and why uniformly across all three actions**: the original
+    motivation (Copilot's review of #43) was that a single immediate
+    read-back check against `get_subgroups()` can misreport a real
+    success as a failure, since that specific listing endpoint is the
+    one confirmed eventually-consistent by the live integration test's
+    own polling (`assert_eventually()`, section 5) — `create_subgroup()`'s
+    and `update_subgroup()`'s own write-call responses are *not*
+    eventually-consistent (the response object itself already reflects
+    the change, per Groups.io's own documented contract and this
+    project's integration test, which trusts `create_subgroup()`'s
+    returned `id` directly with no polling) - only the separate
+    `get_subgroups()`/`get_members()`-style listing calls were ever
+    observed to lag. On its own, that would mean only Delete strictly
+    needs queued retry (confirming an absence has no "here's the
+    result" object to trust). Explicitly decided with the primary
+    contributor to queue Create and Update too regardless: a flooded
+    network or other transient failure could make the write call itself
+    fail, and a queued job retries that automatically without requiring
+    the admin to notice and resubmit. So all three actions are queued
+    uniformly, for two different reasons - Delete for genuine read-back
+    eventual consistency, Create/Update for automatic retry of the
+    write call itself.
+  * **What stays synchronous**: the pre-queue validation each
+    `process_*()` method already does - `process_create()`'s empty-name
+    check, `process_update()`'s id/slug re-validation against a fresh
+    listing and its changed-fields diff (an unchanged no-op update still
+    returns `updated` immediately, nothing queued), and
+    `process_delete()`'s existing-vs-already-gone pre-check (an
+    already-gone target still returns `deleted` immediately, per its
+    existing idempotent-tolerance reasoning). None of this needs
+    queuing - it's local reasoning against an already-fetched listing,
+    not a Groups.io write.
+  * **Immediate response**: once a `process_*()` method decides there's
+    an actual change to make, it queues the job and returns
+    immediately - three new notice codes, `create_submitted`,
+    `update_submitted`, `delete_submitted` (all `success`-type,
+    "your request has been submitted and is being processed" framing),
+    replacing the old synchronous read-back-failure notice text for the
+    *not-yet-confirmed* case specifically. A definitive, immediate
+    validation failure (e.g. the pre-queue checks above) is unaffected
+    and still reported synchronously as today.
+  * **Queued execution, per attempt** (`SubgroupExecutionEngine::execute()`,
+    same `MAX_ATTEMPTS = 3` / `RETRY_DELAY_SECONDS` manual-reschedule
+    pattern as `QueuedExecutionEngine`, since Action Scheduler has no
+    automatic retry of its own):
+    * *Create*: invalidates the expected slug's `SubgroupIdCache` entry,
+      then calls `create_subgroup()`. On success, validates the
+      description directly against the response object - no separate
+      `get_subgroups()` read-back call. If a title was submitted, calls
+      `update_subgroup()` for it and validates title/description
+      against *that* response object instead (a fresher one). On a
+      retried attempt (`attempt > 1`) that hits a `name exists`-shaped
+      error, treats it as idempotent success (a prior attempt already
+      created it, but the response was lost to the same transient
+      failure that's being retried) - looks the subgroup up by slug via
+      one `get_subgroups()` call and continues from there, rather than
+      reporting a spurious failure for a create that actually succeeded.
+    * *Update*: invalidates the old and new slug's `SubgroupIdCache`
+      entries (if renaming), then calls `update_subgroup()` with the
+      already-computed field diff. Validates every changed field
+      directly against the response object - no separate read-back
+      call.
+    * *Delete*: calls `remove_subgroup()` (already idempotent-tolerant
+      of `group_not_found`, per the existing synchronous logic, carried
+      over unchanged), then confirms absence via one `get_subgroups()`
+      call. Still listed → this attempt is treated as not-yet-confirmed
+      and retried; genuinely the one case among the three where the
+      outer retry loop's backoff (a full minute between attempts) is
+      also functioning as the polling the eventual-consistency problem
+      needs, since there's no result object to trust instead.
+    * Any exception (API or transport) on an attempt with retries
+      remaining reschedules per the existing pattern; on final
+      exhaustion, or a not-yet-confirmed Delete after `MAX_ATTEMPTS`,
+      records the outcome.
+  * **`SubgroupIdCache` invalidation timing - resolved**: happens inside
+    `execute()`, at the start of each attempt, not once synchronously at
+    queue time - a retry after a transient failure must not risk serving
+    a stale cache entry from before that attempt, so invalidation is
+    re-applied on every attempt, not just the first.
+  * **Notification policy - confirmed with the primary contributor**: no
+    success notice - the immediate `*_submitted` response already told
+    the admin the action was accepted, and a second notice later just
+    confirming it worked would add noise for the common case. Only
+    final exhaustion calls `AdminNotifications::add( 'failure', ... )`,
+    reusing the exact same persisted-notification mechanism section 8
+    already established for User Assignment, since the "admin may not
+    still be on the page when the queued job finishes" problem is
+    identical here.
+  * **Audit logging - new**: every queued outcome (success and failure
+    alike, unlike the notification policy above - the audit trail's own
+    purpose is a complete record, not just alerting) now calls
+    `AuditLog::record()` with `subgroup_create`/`subgroup_update`/
+    `subgroup_delete` as the action, `target_email` left empty (not
+    applicable, same convention `Settings`' own `settings_update` audit
+    entries already use per `security.md` section 3), `subgroup_id` set,
+    and `api_response_detail` summarizing what changed or the failure
+    reason. The prior synchronous `process_*()` methods never wrote to
+    the audit log at all - a real gap this change also closes, since
+    every other Groups.io-touching action in the plugin already does.
 
 ### 9. Admin Pages: Menu Structure
 
@@ -448,14 +555,14 @@ potentially many subgroups make a fully synchronous request impractical.
   * A plain unordered list of subgroups, one link per subgroup, each link's visible text *and* accessible name being that subgroup's full `email_address` (e.g. `test-group-3@perception-is-all.groups.io`) - unique and unambiguous to a screen reader without needing a per-row `aria-label`, unlike the prior design's identically-labelled per-row controls. Member count shown as adjacent non-link text next to each entry, not folded into the link's accessible name.
 * **Create view** (`?page=bits-groupsio-subgroup-management&view=create`):
   * Three fields: Name (required - the segment that determines the subgroup's address/URL, per `create_subgroup()`), Title (optional, cosmetic display label only - its field description explicitly states it does not affect the address), Description (optional).
-  * `createsubgroup` has no `title` parameter (confirmed against the live docs, section 4.1) - if Title is provided, creation is `create_subgroup()` followed immediately by an `update_subgroup()` call setting only `title`, both read-back-verified the same way rename already is.
-  * One "Create" button. On success, redirects to the List view (matching the existing create-flow pattern) with a success notice; invalidates/refreshes `SubgroupIdCache` so the new subgroup is immediately selectable elsewhere in the plugin (e.g. the level-mandatory-groups meta box from Phase 1).
+  * `createsubgroup` has no `title` parameter (confirmed against the live docs, section 4.1) - if Title is provided, creation is `create_subgroup()` followed immediately by an `update_subgroup()` call setting only `title`.
+  * One "Create" button. **Changed 2026-08-12 (#50)**: the write and its confirmation are now queued (`SubgroupExecutionEngine`, section 8) rather than synchronous - submitting redirects to the List view immediately with a `create_submitted` notice, not a confirmed-success notice. `SubgroupIdCache` invalidation and refresh happens per queued attempt (section 8), not synchronously at submit time.
 * **Details view** (`?page=bits-groupsio-subgroup-management&view=details&subgroup_id=N`):
   * Editable Name/Title/Description fields, pre-filled with the subgroup's current values (fetched fresh, matched against the submitted id per the existing id/slug re-validation pattern from the prior design - still required, since this field set is still reachable via an editable hidden/query id).
   * Below the editable fields: the live member list (read-only), moved here from the old design's per-row "view members" expansion - `GroupsIoApiClient::get_members()`, always read fresh, never cached.
-  * "Update" button: calls `update_subgroup()` with only the fields that actually changed (partial update - `name` change is a true rename per section 3/4.4 above and carries the existing "does not update any level's mandatory-groups list" warning; `title`/`desc` changes are purely cosmetic). Read-back verified the same way the prior design's rename action was.
-  * "Delete" button: reveals an inline confirmation (warning text + "Yes, delete"/"Cancel") on the same page - no separate confirmation page/step, per the same low-density-screen goal. Confirmed delete calls `remove_subgroup()`, read-back verified, invalidates the `SubgroupIdCache` entry, and redirects to the List view with a success notice.
-  * All Groups.io API errors surface in plain language, consistent with the prior design.
+  * "Update" button: calls `update_subgroup()` with only the fields that actually changed (partial update - `name` change is a true rename per section 3/4.4 above and carries the existing "does not update any level's mandatory-groups list" warning; `title`/`desc` changes are purely cosmetic). **Changed 2026-08-12 (#50)**: queued (`SubgroupExecutionEngine`, section 8), same as Create - an unchanged submission (no fields actually differ) is still detected and reported synchronously as `updated` with nothing queued, since that's local reasoning, not a Groups.io write.
+  * "Delete" button: reveals an inline confirmation (warning text + "Yes, delete"/"Cancel") on the same page - no separate confirmation page/step, per the same low-density-screen goal. **Changed 2026-08-12 (#50)**: confirmed delete queues the actual `remove_subgroup()` call and its absence-confirmation (`SubgroupExecutionEngine`, section 8) rather than performing and read-back-verifying it synchronously - redirects to the List view immediately with a `delete_submitted` notice. The already-gone pre-check (an already-deleted target) is unaffected and still resolves synchronously as `deleted`.
+  * All Groups.io API errors from the pre-queue validation steps above surface in plain language, consistent with the prior design; a queued action's eventual failure instead surfaces via the persistent `AdminNotifications` notice (section 8), since the admin may no longer be on this page by the time it's known.
   * **Added 2026-08-12**: an "Add member" control, below the live member list. A search box matching against `MemberIndex`'s existing tracked members by name or email (the same membership-driven model User Assignment already uses - existing PMPro members only, never an arbitrary typed-in email address, per direction), a result list of matches with a checkbox each, and an "Add Selected" button. Submitting queues an add job per selected member for this subgroup via `QueuedExecutionEngine::queue_add()` (section 8) - the same async queued pattern as User Assignment's own Add Groups view, including its existing auto-add-to-parent-group behavior if a selected member isn't already in the parent. Because this is queued rather than synchronous, the member doesn't appear in the live member list above until the job actually runs - the page's existing "Sync" button (section 8) can force this immediately rather than waiting on Action Scheduler's own timing. This is the reverse direction of User Assignment's existing member-first Add Groups flow (start from the group, not the member); both write through the same `queue_add()` path, so there is exactly one place the actual add logic lives.
 
 ### 12. Page: User Assignment
@@ -560,6 +667,23 @@ organized and how actions execute, not what the page is fundamentally for.
   for job scheduling/dispatch, retry-count behavior, and the
   distinct-per-outcome notification write path — Groups.io calls
   themselves mocked, same convention as the rest of the client's tests.
+* `SubgroupExecutionEngine` (section 8, **added 2026-08-12 (#50)**):
+  unit-tested the same way `QueuedExecutionEngine` already is - job
+  scheduling/dispatch, `MAX_ATTEMPTS` retry behavior, the
+  idempotent-tolerant retry path for Create (`name exists` on
+  `attempt > 1`), and the failure-only notification/every-outcome-audit
+  split (unlike `QueuedExecutionEngine`'s every-outcome notification
+  policy - a real behavioral difference worth its own explicit test
+  coverage, not just relying on `QueuedExecutionEngine`'s tests to imply
+  correctness here too). `update_subgroup()` itself gets new live
+  integration coverage (#51): the existing
+  `SubgroupLifecycleIntegrationTest` (section 5) is extended to exercise
+  a rename (`name`), a title change, and a description change against a
+  throwaway subgroup, each confirmed via `assert_eventually()`
+  read-back against the real test group - `update_subgroup()` was
+  previously only exercised against canned unit/E2E mock responses that
+  already encode the same `name`-vs-`title` assumption they'd be
+  checking, not the real API.
 * Sticky-override flag read/write logic (now part of the member-index
   table, section 6): `WP_UnitTestCase`-based unit tests against the real
   WordPress test database, per existing convention.
@@ -609,6 +733,20 @@ the authoritative source if the two ever diverge:
   Details view (section 11), the add completing asynchronously via the
   queued execution engine exactly like every other add in the plugin —
   all verified with a screen reader pass.
+* **Phase 3, further 2026-08-12 amendment (#50/#51)**: Subgroup
+  Management's Create/Update/Delete each complete asynchronously via
+  `SubgroupExecutionEngine` (section 8) - an admin sees an immediate
+  `*_submitted` notice on each, a genuine failure after `MAX_ATTEMPTS`
+  surfaces as a persistent, dismissible `AdminNotifications` notice
+  rather than a one-shot redirect notice, and a real success within
+  those attempts produces no additional notice; `AuditLog::record()`
+  writes a real entry (both outcomes) for every Subgroup Management
+  create/update/delete attempt, closing the gap where these three
+  actions never wrote to the audit log at all; and the live integration
+  test (section 5) confirms `update_subgroup()`'s rename/title/desc
+  behavior against the real test group, not just mocked responses — all
+  verified against the test group, and the persistent notice verified
+  with a screen reader pass.
 
 ### 15. Page: Plugin Configuration — Added 2026-08-12
 
