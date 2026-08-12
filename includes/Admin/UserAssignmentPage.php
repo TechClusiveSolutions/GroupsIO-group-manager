@@ -826,7 +826,7 @@ final class UserAssignmentPage {
 		$label       = sprintf(
 			/* translators: 1: group title, 2: group slug/namespace. */
 			__( '%1$s (%2$s)', 'bits-groupsio-sync' ),
-			'' !== $group['subgroup_title'] ? $group['subgroup_title'] : $group['subgroup_slug'],
+			'' !== $group['subgroup_title'] ? $group['subgroup_title'] : self::subgroup_name_segment( $group['subgroup_slug'] ),
 			$group['subgroup_slug']
 		);
 
@@ -852,6 +852,23 @@ final class UserAssignmentPage {
 		}
 		echo '</td>';
 		echo '</tr>';
+	}
+
+	/**
+	 * Extracts the "sub" segment from a "parent+sub" slug, for the
+	 * fallback label a titleless group's row uses (#98) - the subgroup's
+	 * own name should lead the label, not the full parent+sub slug
+	 * (which is still shown in full as the label's parenthesized
+	 * context, per render_group_row()/render_addable_group_table()).
+	 * Mirrors SubgroupManagementPage's own identical helper.
+	 *
+	 * @param string $slug Full slug.
+	 * @return string
+	 */
+	private static function subgroup_name_segment( string $slug ): string {
+		$pos = strpos( $slug, '+' );
+
+		return false === $pos ? $slug : substr( $slug, $pos + 1 );
 	}
 
 	/**
@@ -1143,7 +1160,7 @@ final class UserAssignmentPage {
 			$label       = sprintf(
 				/* translators: 1: group title, 2: group slug/namespace. */
 				__( '%1$s (%2$s)', 'bits-groupsio-sync' ),
-				'' !== $group['subgroup_title'] ? $group['subgroup_title'] : $group['subgroup_slug'],
+				'' !== $group['subgroup_title'] ? $group['subgroup_title'] : self::subgroup_name_segment( $group['subgroup_slug'] ),
 				$group['subgroup_slug']
 			);
 

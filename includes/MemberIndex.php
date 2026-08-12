@@ -133,7 +133,8 @@ final class MemberIndex {
 	 * User Assignment List page's "including parent" group count its
 	 * +1. Existing override_type/override_by/override_at values are
 	 * left untouched - only clear_overrides_for_user() and the (later)
-	 * queued execution engine write those columns.
+	 * queued execution engine write those columns. Finally, reconciles
+	 * parent-group membership (#100) - see reconcile_parent_membership().
 	 *
 	 * @return void
 	 */
@@ -154,7 +155,9 @@ final class MemberIndex {
 			return;
 		}
 
-		self::sync_subgroup( $parent_id, $parent_slug, (string) ( $parent['title'] ?? $parent_slug ) );
+		$parent_title = (string) ( $parent['title'] ?? $parent_slug );
+
+		self::sync_subgroup( $parent_id, $parent_slug, $parent_title );
 
 		try {
 			$subgroups = GroupsIoApiClient::get_subgroups( $parent_slug );
@@ -174,12 +177,91 @@ final class MemberIndex {
 				(string) ( $subgroup['title'] ?? '' )
 			);
 		}
+
+		self::reconcile_parent_membership( $parent_id, $parent_slug, $parent_title );
+	}
+
+	/**
+	 * #100: every member should belong to the parent group - normally
+	 * enforced at PMPro signup time (Phase 4, not yet built), so nothing
+	 * else currently guarantees it. Finds every real member (excluding
+	 * anchor rows, per sync_subgroup()'s doc comment) present in any
+	 * subgroup but missing a currently-valid parent-group row, and
+	 * queues an add to the parent for each via
+	 * QueuedExecutionEngine::queue_add() - reusing the existing queued
+	 * add path rather than a direct Groups.io call, consistent with
+	 * every other add in the plugin. Skips anyone whose own parent-group
+	 * row already carries a 'removed' override - a member an admin has
+	 * deliberately removed from the parent must not be silently
+	 * re-added here. Self-correcting and idempotent across runs:
+	 * queue_add() -> apply_add() gives the member a valid parent row, so
+	 * the next sync() run's query here no longer selects them.
+	 *
+	 * @param int    $parent_id    Numeric parent group id.
+	 * @param string $parent_slug  Parent group's own slug.
+	 * @param string $parent_title Parent group's own cosmetic title, if any.
+	 * @return void
+	 */
+	private static function reconcile_parent_membership( int $parent_id, string $parent_slug, string $parent_title ): void {
+		global $wpdb;
+
+		$table = self::table_name();
+
+		// The table's UNIQUE KEY (email, subgroup_id) guarantees at most
+		// one row per (email, parent) pairing, so "has any parent row at
+		// all" and "has a currently-valid, non-removed parent row" are
+		// the same check here - a 'removed' override is still a row, and
+		// must still exclude that member from reconciliation (the whole
+		// point of respecting the override), not just a non-removed row.
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- $table is our own fixed table name, not user input.
+		$sql = $wpdb->prepare(
+			"SELECT t1.email, MAX(t1.user_id) AS user_id, MAX(t1.display_name) AS display_name
+			FROM $table t1
+			WHERE t1.email != ''
+				AND t1.subgroup_slug != %s
+				AND NOT EXISTS (
+					SELECT 1 FROM $table t2
+					WHERE t2.email = t1.email
+						AND t2.subgroup_slug = %s
+				)
+			GROUP BY t1.email",
+			$parent_slug,
+			$parent_slug
+		);
+		// phpcs:enable
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- $sql was already built via $wpdb->prepare() above.
+		$rows = $wpdb->get_results( $sql, ARRAY_A );
+
+		foreach ( (array) $rows as $row ) {
+			QueuedExecutionEngine::queue_add(
+				(int) $row['user_id'],
+				(string) $row['email'],
+				(string) $row['display_name'],
+				$parent_id,
+				$parent_slug,
+				$parent_title,
+				0
+			);
+		}
 	}
 
 	/**
 	 * Syncs one subgroup's (or the parent group's) member list into the
 	 * index. A single subgroup's lookup failure doesn't abort the whole
 	 * sync - the next scheduled run retries it.
+	 *
+	 * Also always upserts one memberless "anchor" row (email = '') for
+	 * this subgroup_id, in addition to any real member rows below - #99:
+	 * a subgroup with zero real members would otherwise produce zero
+	 * rows at all, making it permanently invisible to
+	 * get_addable_groups()/find_group_by_slug() (both of which derive
+	 * their result purely from existing rows in this table) no matter
+	 * how many sync runs pass. The anchor row is excluded explicitly
+	 * wherever a query enumerates or counts *real* members
+	 * (count_members()/get_members_page(), both filter email != '') -
+	 * every other query here already only ever matches a specific real
+	 * target email, so it's naturally unaffected.
 	 *
 	 * @param int    $subgroup_id    Numeric Groups.io group/subgroup id.
 	 * @param string $subgroup_slug  Full slug (parent, or parent+sub).
@@ -192,6 +274,8 @@ final class MemberIndex {
 		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
 			return;
 		}
+
+		self::upsert_row( 0, '', '', $subgroup_id, $subgroup_slug, $subgroup_title, null, false );
 
 		foreach ( (array) ( $members['data'] ?? array() ) as $member ) {
 			$email = (string) ( $member['email'] ?? '' );
@@ -847,7 +931,7 @@ final class MemberIndex {
 
 		if ( '' === $search ) {
 			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is our own fixed table name (self::table_name()), not user input; there is no other value to prepare in this branch.
-			return (int) $wpdb->get_var( "SELECT COUNT(DISTINCT email) FROM $table" );
+			return (int) $wpdb->get_var( "SELECT COUNT(DISTINCT email) FROM $table WHERE email != ''" );
 			// phpcs:enable
 		}
 
@@ -855,7 +939,7 @@ final class MemberIndex {
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- $table is our own fixed table name; $where_sql is a fixed fragment built by search_where() containing only placeholders, filled by $params below.
 		$sql = $wpdb->prepare(
-			"SELECT COUNT(DISTINCT email) FROM $table WHERE email IN ( SELECT DISTINCT email FROM $table WHERE $where_sql )",
+			"SELECT COUNT(DISTINCT email) FROM $table WHERE email != '' AND email IN ( SELECT DISTINCT email FROM $table WHERE $where_sql )",
 			$params
 		);
 		// phpcs:enable
@@ -891,12 +975,17 @@ final class MemberIndex {
 		$offset = max( 0, ( max( 1, $page ) - 1 ) * $per_page );
 
 		if ( '' === $search ) {
-			$where_sql = '1=1';
+			$where_sql = "email != ''";
 			$params    = array();
 		} else {
 			list( $sub_where_sql, $sub_params ) = self::search_where( $search );
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is our own fixed table name; $sub_where_sql is a fixed fragment built by search_where() containing only placeholders, filled via $sub_params below.
-			$where_sql = "email IN ( SELECT DISTINCT email FROM $table WHERE $sub_where_sql )";
+			// An anchor row (email = '', added by sync_subgroup() for #99)
+			// carries the real subgroup_slug/subgroup_title, so a search
+			// term matching that subgroup would otherwise match the
+			// anchor row's email too - excluded explicitly so a search
+			// never surfaces a phantom blank-email "member".
+			$where_sql = "email != '' AND email IN ( SELECT DISTINCT email FROM $table WHERE $sub_where_sql )";
 			$params    = $sub_params;
 		}
 
