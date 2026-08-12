@@ -335,6 +335,37 @@ potentially many subgroups make a fully synchronous request impractical.
     client-side and don't persist dismissal, which isn't sufficient here
     since a plain page-load hides nothing on its own; this queue's records
     must be actively removed once seen, not merely visually hidden.
+* **Auto-add to parent group — added 2026-08-12**: `queue_add()` now also
+  queues an add to the configured parent group whenever the member being
+  added to a subgroup isn't already a current member of the parent
+  ("current" per the same definition `MemberIndex::get_member_groups()`
+  uses elsewhere — a row exists and doesn't carry `override_type = 'removed'`).
+  Applies everywhere `queue_add()` is called (today, only the Add Groups
+  view's "Add Selected" - not limited to that one caller, so any future
+  add path automatically gets the same behavior). A member can't
+  meaningfully belong to one of BITS' Groups.io subgroups without also
+  belonging to the parent group itself.
+  * The parent-membership check and the parent subgroup's own numeric id
+    are both resolved purely from the local index
+    (`MemberIndex::is_currently_in_group()`/`find_group_by_slug()`) — no
+    live Groups.io call happens inside `queue_add()`, consistent with
+    section 8's existing "no synchronous Groups.io API call happens
+    inside that request" principle. If the parent's own row has never
+    been locally indexed yet (only possible before the first sync has
+    ever run against a fresh install), the parent id can't be resolved
+    locally and the auto-add is skipped rather than making a live call
+    to look it up — the next scheduled `sync()` run corrects this
+    regardless, and a brand-new install with no prior sync is not a
+    state any admin action happens in practice.
+  * Guarded against infinite recursion by construction, not a separate
+    check: the parent-add path only ever triggers when the subgroup
+    being added is *not itself* the parent, so the recursive
+    `queue_add()` call it makes (for the parent) immediately fails that
+    same condition and returns without recursing further.
+  * Does not change the "N group addition(s) queued" notice count on the
+    Add Groups view — the auto-queued parent add is a transparent
+    implementation detail of ensuring valid Groups.io membership, not an
+    action the admin explicitly requested tracking for.
 
 ### 9. Admin Pages: Menu Structure
 

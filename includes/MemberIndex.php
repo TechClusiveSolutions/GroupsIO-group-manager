@@ -480,6 +480,70 @@ final class MemberIndex {
 	}
 
 	/**
+	 * Whether a member currently counts as subscribed to a group by
+	 * slug - a row exists and doesn't carry override_type = 'removed'.
+	 * Same "currently subscribed" definition get_member_groups() uses,
+	 * just looked up by slug rather than numeric id (for
+	 * QueuedExecutionEngine's parent-group auto-add check, which only
+	 * has the configured parent slug on hand, not its numeric id).
+	 *
+	 * @param string $email         Member's email address.
+	 * @param string $subgroup_slug Full slug to check.
+	 * @return bool
+	 */
+	public static function is_currently_in_group( string $email, string $subgroup_slug ): bool {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- this table isn't object-cached, matching AuditLog's own uncached direct-write convention.
+		$count = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- self::table_name() is our own fixed table name, not user input.
+				'SELECT COUNT(*) FROM ' . self::table_name() . " WHERE email = %s AND subgroup_slug = %s AND ( override_type IS NULL OR override_type != 'removed' )",
+				$email,
+				$subgroup_slug
+			)
+		);
+
+		return $count > 0;
+	}
+
+	/**
+	 * Resolves a group's numeric subgroup_id/subgroup_title from any
+	 * existing row carrying its slug - every member's row for a given
+	 * group shares the same subgroup_id/subgroup_title, so any one row
+	 * (regardless of which member it belongs to) can resolve it. Used by
+	 * QueuedExecutionEngine's parent-group auto-add to find the parent's
+	 * own numeric id purely from the local index, without a live
+	 * Groups.io lookup. Returns null if the group has never been
+	 * indexed locally yet (no member has ever been synced against it).
+	 *
+	 * @param string $subgroup_slug Full slug to look up.
+	 * @return array{subgroup_id: int, subgroup_title: string}|null
+	 */
+	public static function find_group_by_slug( string $subgroup_slug ): ?array {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- this table isn't object-cached, matching AuditLog's own uncached direct-write convention.
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- self::table_name() is our own fixed table name, not user input.
+				'SELECT subgroup_id, subgroup_title FROM ' . self::table_name() . ' WHERE subgroup_slug = %s LIMIT 1',
+				$subgroup_slug
+			),
+			ARRAY_A
+		);
+
+		if ( null === $row ) {
+			return null;
+		}
+
+		return array(
+			'subgroup_id'    => (int) $row['subgroup_id'],
+			'subgroup_title' => (string) $row['subgroup_title'],
+		);
+	}
+
+	/**
 	 * Reads the display name stored for one member (the MAX() across
 	 * their rows, matching get_members_page()'s own aggregation, since
 	 * every row for one email carries the same display_name from the
