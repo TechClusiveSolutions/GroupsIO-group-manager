@@ -58,7 +58,7 @@ After tagging and publishing a release, `main` has a commit (the release merge c
 * A second job in `release.yml`, gated on the tag-and-release job succeeding, handles this automatically, with no manual or approval step: it creates a short-lived branch from the just-tagged `main` commit (named `infra/sync-main-vX.Y.Z`, so it passes `branch-name-lint` and is exempt from `changelog-check` — it's pure bookkeeping, not new work), opens a pull request with `dev` as the base, and enables GitHub's native auto-merge (a real merge, not a squash, so the tagged commit becomes a true ancestor of `dev`) with branch deletion on completion.
 * This still flows through a real pull request against a protected branch (satisfying `CLAUDE.md`'s "no direct pushes... under any circumstance"), and still waits for `dev`'s required status checks to pass before merging (via GitHub's auto-merge, not a busy-wait in the workflow) — it only skips the usual explicit human go-ahead in conversation, since the primary contributor has given blanket approval for this specific, structurally risk-free, content-identical sync-back operation ahead of time.
 
-### 5. What CI Does Not Cover
+### 6. What CI Does Not Cover
 
 * Screen reader / accessibility verification is manual (per the Testing Standard document, section 6) and is not a CI job.
 * Deployment to the WordPress.com staging site or the live BITS site is not automated by CI in v1 — it remains a manual step, consistent with Phase 9 and Phase 10's exit criteria.

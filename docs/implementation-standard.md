@@ -43,8 +43,8 @@ Resolved (deferred from the Security document, section 4): the nightly reconcili
 
 ### 9. Test-Execution Mechanics
 
-* Local: `composer test` runs the full PHPUnit suite (unit only by default; a separate `composer test:integration` runs the integration suite against the test Groups.io group, requiring local environment variables for the test credential).
-* CI: both suites run on every pull request, per the Testing Standard document; coverage is computed from the unit suite only and gated at 80%.
+* Local: `composer test` runs the full unit PHPUnit suite (`vendor/bin/phpunit`). The integration suite runs separately via `vendor/bin/phpunit -c phpunit.integration.xml.dist`, requiring local environment variables for the test credential.
+* **Changed 2026-08-11**: CI automatically runs the unit suite and the Playwright e2e suite on every pull request, per the Testing Standard document; coverage is computed from the unit suite only and gated at 80%. The integration suite no longer runs automatically — it runs only via manual dispatch of the `integration.yml` workflow (per `docs/ci.md` section 3.3), and a contributor touching Groups.io-calling code is expected to trigger it manually before requesting merge approval.
 
 ### 10. Branch Naming and Changelog Discipline
 
