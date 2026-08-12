@@ -17,7 +17,7 @@ No code is written in this phase.
 * Build the admin settings screen for the database-backed operational settings only (global mandatory groups, grace period, log retention policy, kill switch) — not credentials, which remain `wp-config.php` constants per PRD section 3.1.
 * Build the level-specific mandatory groups meta box on the PMPro Edit Membership Level screen.
 * Set up CI: linting and an initial (near-empty) PHPUnit run on every pull request.
-* Exit criterion: the plugin activates cleanly on a WordPress install, the audit table exists, an admin can save and retrieve the operational settings and level-specific mandatory groups, and CI runs on every PR.
+* Exit criterion: **met**. The plugin activates cleanly on a WordPress install, the audit table exists, an admin can save and retrieve the operational settings and level-specific mandatory groups, and CI runs on every PR.
 
 ### Phase 2 — Groups.io API Client
 
@@ -26,13 +26,13 @@ No code is written in this phase.
 * Build the subgroup-ID cache described in PRD section 4.3 (slug-to-`group_id` mapping, refreshed on `group_not_found` and periodically via reconciliation).
 * Implement 429 handling (parse `Retry-After`, reschedule with jitter), 5xx/timeout retry via Action Scheduler's exponential backoff, and dispatch on the confirmed error `type` field: `unauthorized_error`/`inadequate_permissions` triggers the authentication hard-stop with admin alert, `group_not_found` triggers a skip-and-continue plus a cache invalidation.
 * Unit-test the client against mocked HTTP responses only — no real network calls in the unit suite.
-* Exit criterion: the client is unit-tested for all documented response/error paths, and has been manually exercised at least once against the existing test Groups.io group(s), successfully adding to and removing from a subgroup (already demonstrated during Phase 0 verification — this exit criterion is satisfied by that trial plus the corresponding automated unit tests once written).
+* Exit criterion: **met**. The client is unit-tested for all documented response/error paths, and has been manually exercised at least once against the existing test Groups.io group(s), successfully adding to and removing from a subgroup (already demonstrated during Phase 0 verification — this exit criterion is satisfied by that trial plus the corresponding automated unit tests once written).
 
 ### Phase 3 — GroupsIO Management Admin Pages
 
 Approved as a scope expansion on 2026-07-22 (see `CLAUDE.md`'s Scope Discipline section) and amending Phase 2: full admin-side subgroup lifecycle management (create/list/update/delete subgroups via the Groups.io API, independent of the automated member sync built in later phases), manual admin override of individual member subgroup assignment for intervention when automation misbehaves, and a dedicated "GroupsIO Management" admin area exposing this as three distinct pages. Full design in `app/docs/subgroup-crud-and-admin-pages-design.md`.
 
-* Amend Phase 2's client: add `GroupsIoApiClient::create_subgroup()`, `::remove_subgroup()`, and `::update_subgroup()`, plus a permanent CI-automated integration test exercising the full subgroup lifecycle (create → add → remove → delete) against the test group on every pull request.
+* Amend Phase 2's client: add `GroupsIoApiClient::create_subgroup()`, `::remove_subgroup()`, and `::update_subgroup()`, plus a permanent integration test exercising the full subgroup lifecycle (create → add → remove → delete) against the test group. **Changed 2026-08-11**: this integration test, like the rest of `tests/integration/`, no longer runs automatically on every pull request — it runs via manual dispatch of `integration.yml` (see `docs/ci.md` section 3.3).
 * Build the "GroupsIO Management" top-level admin menu scaffold, and relocate the Phase 1 settings screen to become the "Feature Controls" page under it (storage and rendering unchanged — only its menu location and heading move).
 * Build the Subgroup Management page: a List view (subgroup count, parent group address, every subgroup as a link to its Details view), a Create view, and a Details view (editable name/title/description, live member list, Update/Delete) — a low-density, screen-reader-friendly three-view layout, not a single combined page.
 * Build the User Assignment page and the sticky manual-override flag data model: member lookup, per-subgroup Add/Remove actions with follow-up read-back verification, and a "clear override" action. Suspend is investigated and explicitly deferred: Groups.io's native `banmember` endpoint was found broken server-side by live trial on 2026-07-25, so suspend's eventual implementation (a `remove_member()` plus sticky-override-flag fallback) is folded into Phase 6's drift-reconciliation work instead of built standalone here. This pass ships Add/Remove only.

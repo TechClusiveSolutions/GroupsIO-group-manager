@@ -9,7 +9,7 @@ This document specifies, per issue type, the conditions that must be true before
 ### 2. Common to Every Issue Type
 
 * All fields required by `CLAUDE.md`'s Issue Tracking section are populated (assignee, status, priority, labels, milestone, project, parent/children/siblings or explicit "none", type, estimated completion, subtype, phase, docs link).
-* Any code change passes CI in full: documentation lint, code lint, static analysis, unit tests, the 80% coverage gate, and integration tests (per `docs/ci.md`).
+* Any code change passes CI in full: documentation lint, code lint, static analysis, unit tests, the 80% coverage gate, and the e2e (Playwright) suite (per `docs/ci.md`). If the change touches `GroupsIoApiClient` or another Groups.io-calling code path, the integration suite (`integration.yml`) has also been manually triggered and confirmed passing before requesting merge approval — it is no longer part of the automatic CI gate itself (per `docs/ci.md` section 3.3), but is still required for that category of change.
 * The pull request is reviewed, with all review threads resolved, and merge-authorized per the project's working agreement (verbal confirmation from the primary contributor, per `docs/ci.md` section 2), before merging to `dev`.
 
 ### 3. Feature-Type Issues

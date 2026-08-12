@@ -23,6 +23,7 @@ This document supersedes the earlier working draft (`PmPro-GroupsIO-PRD.md`, ret
 * An admin settings screen for operational configuration (see section 3.3).
 * A passwordless "magic link" mechanism granting full WordPress profile access, per section 5.
 * Basic admin operability: visibility into pending/failed sync jobs, and a kill switch to halt all sync activity.
+* **Added as a scope expansion, 2026-07-22** (see `CLAUDE.md`'s Scope Discipline section and `phase-plan.md`'s Phase 3): full admin-side subgroup lifecycle management (create/list/update/delete Groups.io subgroups directly, independent of the automated member sync above), manual admin override of individual member subgroup assignment (add/remove, with suspend deferred) for intervention when automation misbehaves or before it exists, and a dedicated "GroupsIO Management" admin area exposing this as three pages (Feature Controls, Subgroup Management, User Assignment). Full design in `subgroup-crud-and-admin-pages-design.md`. This is a permanent part of v1 in its own right, not a placeholder for the automated sync above.
 
 #### 2.2 Explicitly out of scope for v1 (backlog)
 
