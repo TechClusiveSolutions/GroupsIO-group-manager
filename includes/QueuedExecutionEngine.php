@@ -52,7 +52,13 @@ final class QueuedExecutionEngine {
 	/**
 	 * Queues one add job for a single (member, subgroup) pair. A bulk
 	 * "Add Selected" action calls this once per checked group, not once
-	 * for the whole batch.
+	 * for the whole batch. Also queues an add to the configured parent
+	 * group if the member isn't already a current member of it (per
+	 * MemberIndex::is_currently_in_group()'s "currently subscribed"
+	 * definition) - a member can't meaningfully belong to one of BITS'
+	 * Groups.io subgroups without also belonging to the parent group
+	 * itself. See maybe_queue_parent_add() below for how the parent
+	 * add is resolved and guarded against recursion.
 	 *
 	 * @param int    $user_id        Matched WP user id of the member, or 0 if none.
 	 * @param string $email          Member's email address.
@@ -85,6 +91,63 @@ final class QueuedExecutionEngine {
 				'attempt'        => 1,
 			),
 			time()
+		);
+
+		self::maybe_queue_parent_add( $user_id, $email, $display_name, $subgroup_slug, $admin_user_id );
+	}
+
+	/**
+	 * Queues an add to the configured parent group, if the member being
+	 * added to $subgroup_slug isn't already a current member of the
+	 * parent and the parent isn't the group already being added
+	 * ($subgroup_slug itself). The parent's own numeric subgroup_id is
+	 * resolved purely from the local index
+	 * (MemberIndex::find_group_by_slug()) - no live Groups.io call
+	 * happens here, consistent with queue_add()'s own "no synchronous
+	 * Groups.io API call happens inside that request" design. If the
+	 * parent has never been locally indexed yet (only possible before
+	 * the first sync() run against a fresh install), the auto-add is
+	 * silently skipped rather than making a live lookup call - the next
+	 * scheduled sync() corrects this regardless.
+	 *
+	 * Guarded against infinite recursion by construction: this is only
+	 * ever reached from queue_add(), and the $subgroup_slug === $parent_slug
+	 * check below means the recursive queue_add() call this method makes
+	 * (for the parent) always fails that same check on its own
+	 * maybe_queue_parent_add() invocation, so it can never recurse a
+	 * second level deep.
+	 *
+	 * @param int    $user_id       Matched WP user id of the member, or 0 if none.
+	 * @param string $email         Member's email address.
+	 * @param string $display_name  Member's display name, if known.
+	 * @param string $subgroup_slug Full slug of the group/subgroup just queued for adding.
+	 * @param int    $admin_user_id WP user id of the admin queuing the action.
+	 * @return void
+	 */
+	private static function maybe_queue_parent_add( int $user_id, string $email, string $display_name, string $subgroup_slug, int $admin_user_id ): void {
+		$parent_slug = self::parent_group();
+
+		if ( '' === $parent_slug || $parent_slug === $subgroup_slug ) {
+			return;
+		}
+
+		if ( MemberIndex::is_currently_in_group( $email, $parent_slug ) ) {
+			return;
+		}
+
+		$parent = MemberIndex::find_group_by_slug( $parent_slug );
+		if ( null === $parent ) {
+			return;
+		}
+
+		self::queue_add(
+			$user_id,
+			$email,
+			$display_name,
+			$parent['subgroup_id'],
+			$parent_slug,
+			$parent['subgroup_title'],
+			$admin_user_id
 		);
 	}
 

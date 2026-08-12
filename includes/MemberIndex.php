@@ -480,6 +480,70 @@ final class MemberIndex {
 	}
 
 	/**
+	 * Whether a member currently counts as subscribed to a group by
+	 * slug - a row exists and doesn't carry override_type = 'removed'.
+	 * Same "currently subscribed" definition get_member_groups() uses,
+	 * just looked up by slug rather than numeric id (for
+	 * QueuedExecutionEngine's parent-group auto-add check, which only
+	 * has the configured parent slug on hand, not its numeric id).
+	 *
+	 * @param string $email         Member's email address.
+	 * @param string $subgroup_slug Full slug to check.
+	 * @return bool
+	 */
+	public static function is_currently_in_group( string $email, string $subgroup_slug ): bool {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- this table isn't object-cached, matching AuditLog's own uncached direct-write convention.
+		$count = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- self::table_name() is our own fixed table name, not user input.
+				'SELECT COUNT(*) FROM ' . self::table_name() . " WHERE email = %s AND subgroup_slug = %s AND ( override_type IS NULL OR override_type != 'removed' )",
+				$email,
+				$subgroup_slug
+			)
+		);
+
+		return $count > 0;
+	}
+
+	/**
+	 * Resolves a group's numeric subgroup_id/subgroup_title from any
+	 * existing row carrying its slug - every member's row for a given
+	 * group shares the same subgroup_id/subgroup_title, so any one row
+	 * (regardless of which member it belongs to) can resolve it. Used by
+	 * QueuedExecutionEngine's parent-group auto-add to find the parent's
+	 * own numeric id purely from the local index, without a live
+	 * Groups.io lookup. Returns null if the group has never been
+	 * indexed locally yet (no member has ever been synced against it).
+	 *
+	 * @param string $subgroup_slug Full slug to look up.
+	 * @return array{subgroup_id: int, subgroup_title: string}|null
+	 */
+	public static function find_group_by_slug( string $subgroup_slug ): ?array {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- this table isn't object-cached, matching AuditLog's own uncached direct-write convention.
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- self::table_name() is our own fixed table name, not user input.
+				'SELECT subgroup_id, subgroup_title FROM ' . self::table_name() . ' WHERE subgroup_slug = %s LIMIT 1',
+				$subgroup_slug
+			),
+			ARRAY_A
+		);
+
+		if ( null === $row ) {
+			return null;
+		}
+
+		return array(
+			'subgroup_id'    => (int) $row['subgroup_id'],
+			'subgroup_title' => (string) $row['subgroup_title'],
+		);
+	}
+
+	/**
 	 * Reads the display name stored for one member (the MAX() across
 	 * their rows, matching get_members_page()'s own aggregation, since
 	 * every row for one email carries the same display_name from the
@@ -764,8 +828,14 @@ final class MemberIndex {
 	/**
 	 * Returns one page of distinct members for the User Assignment List
 	 * page, each as {email, display_name, group_count} - group_count is
-	 * the member's total subgroup-membership count (parent + subgroups)
-	 * across the whole index, not just rows matching a search term. A
+	 * the member's total *currently subscribed* subgroup-membership
+	 * count (parent + subgroups) across the whole index, not just rows
+	 * matching a search term. Excludes any row carrying
+	 * override_type = 'removed', matching get_member_groups()'s own
+	 * "currently subscribed" definition - a member who has been
+	 * manually removed from a group must not still count it here (a
+	 * member removed from everything correctly shows group_count 0, not
+	 * a stale count of rows that no longer reflect real membership). A
 	 * search term matching a subgroup name/slug/title still returns the
 	 * member's full group count, per section 12's "matches against
 	 * member name, email, or subgroup name/slug" acceptance criterion.
@@ -796,7 +866,8 @@ final class MemberIndex {
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- $table is our own fixed table name; $where_sql is a fixed fragment (either the literal '1=1' or search_where()'s placeholder-only output); both are interpolated across this multi-line SQL string, so the disable is scoped to the whole statement, matching upsert_row()'s own convention above.
 		$sql = $wpdb->prepare(
-			"SELECT email, MAX(display_name) AS display_name, COUNT(DISTINCT subgroup_id) AS group_count
+			"SELECT email, MAX(display_name) AS display_name,
+				COUNT(DISTINCT CASE WHEN override_type IS NULL OR override_type != 'removed' THEN subgroup_id END) AS group_count
 			FROM $table
 			WHERE $where_sql
 			GROUP BY email

@@ -640,7 +640,13 @@ final class UserAssignmentPage {
 		$total_items = MemberIndex::count_member_groups( $email, $search );
 
 		if ( 0 === $total_items ) {
+			// Still reachable even with nothing currently subscribed (e.g.
+			// a member manually removed from every group) - a member with
+			// zero groups is exactly the case where "Add groups" is most
+			// needed, so this link must not be gated behind having at
+			// least one row to show.
 			echo '<p>' . esc_html__( 'No currently subscribed groups found.', 'bits-groupsio-sync' ) . '</p>';
+			self::render_add_groups_link( $email );
 			return;
 		}
 
@@ -650,7 +656,16 @@ final class UserAssignmentPage {
 
 		self::render_group_table( $email, $groups, $confirm_parent_id );
 		self::render_details_pagination( $email, $paged, $total_pages, $search );
+		self::render_add_groups_link( $email );
+	}
 
+	/**
+	 * Renders the link to the Add Groups view.
+	 *
+	 * @param string $email Member's email address.
+	 * @return void
+	 */
+	private static function render_add_groups_link( string $email ): void {
 		printf(
 			'<p><a href="%1$s">%2$s</a></p>',
 			esc_url( self::add_groups_url( $email ) ),

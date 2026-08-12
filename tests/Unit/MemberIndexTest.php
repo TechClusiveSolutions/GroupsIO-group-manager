@@ -587,4 +587,59 @@ final class MemberIndexTest extends WP_UnitTestCase {
 		$this->assertCount( 2, $page_two );
 		$this->assertNotSame( $page_one[0]['subgroup_id'], $page_two[0]['subgroup_id'] );
 	}
+
+	public function test_get_members_page_excludes_removed_groups_from_group_count(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', '', 1 );
+
+		$rows = MemberIndex::get_members_page( 1, 20 );
+
+		$this->assertSame( 2, $rows[0]['group_count'], 'Sanity check before removal.' );
+
+		MemberIndex::apply_remove( 'alice@example.test', 2, 1 );
+
+		$rows = MemberIndex::get_members_page( 1, 20 );
+
+		$this->assertSame( 1, $rows[0]['group_count'], 'A manually-removed group must not still count toward the List view\'s group_count.' );
+	}
+
+	public function test_get_members_page_reports_zero_group_count_when_everything_is_removed(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_remove( 'alice@example.test', 1, 1 );
+
+		$rows = MemberIndex::get_members_page( 1, 20 );
+
+		$this->assertCount( 1, $rows, 'A fully-removed member should still appear in the list, not disappear entirely.' );
+		$this->assertSame( 0, $rows[0]['group_count'] );
+	}
+
+	public function test_is_currently_in_group_returns_true_for_a_normal_row(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+
+		$this->assertTrue( MemberIndex::is_currently_in_group( 'alice@example.test', 'perception-is-all' ) );
+	}
+
+	public function test_is_currently_in_group_returns_false_for_a_removed_row(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_remove( 'alice@example.test', 1, 1 );
+
+		$this->assertFalse( MemberIndex::is_currently_in_group( 'alice@example.test', 'perception-is-all' ) );
+	}
+
+	public function test_is_currently_in_group_returns_false_when_no_row_exists(): void {
+		$this->assertFalse( MemberIndex::is_currently_in_group( 'nobody@example.test', 'perception-is-all' ) );
+	}
+
+	public function test_find_group_by_slug_resolves_id_and_title_from_any_members_row(): void {
+		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', 'Perception Is All', 1 );
+
+		$group = MemberIndex::find_group_by_slug( 'perception-is-all' );
+
+		$this->assertSame( 1, $group['subgroup_id'] );
+		$this->assertSame( 'Perception Is All', $group['subgroup_title'] );
+	}
+
+	public function test_find_group_by_slug_returns_null_when_never_indexed(): void {
+		$this->assertNull( MemberIndex::find_group_by_slug( 'perception-is-all+never-synced' ) );
+	}
 }
