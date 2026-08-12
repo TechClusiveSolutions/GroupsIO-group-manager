@@ -411,16 +411,17 @@ potentially many subgroups make a fully synchronous request impractical.
 ### 9. Admin Pages: Menu Structure
 
 * A single new top-level WordPress admin menu item, "GroupsIO Management,"
-  registered via `add_menu_page()`, with three submenu pages registered via
+  registered via `add_menu_page()`, with submenu pages registered via
   `add_submenu_page()`:
   1. User Assignment (default landing page for the top-level menu click).
   2. Feature Controls.
   3. Subgroup Management.
+  4. **Added 2026-08-12**: Plugin Configuration — see section 15.
 * Each page is its own class under `includes/Admin/` (new subdirectory,
   since this is the first admin-page-per-class split in the codebase;
   existing `Settings.php` stays where it is per section 10 below), following
   the single-responsibility-per-class rule in `CLAUDE.md`.
-* All three pages follow the accessible-admin-UI patterns already
+* All pages follow the accessible-admin-UI patterns already
   established in `Settings.php` and documented in
   `.github/instructions/frontend.instructions.md`: native `<label for>`,
   `aria-describedby` field descriptions, autofocus on the first field only,
@@ -455,6 +456,7 @@ potentially many subgroups make a fully synchronous request impractical.
   * "Update" button: calls `update_subgroup()` with only the fields that actually changed (partial update - `name` change is a true rename per section 3/4.4 above and carries the existing "does not update any level's mandatory-groups list" warning; `title`/`desc` changes are purely cosmetic). Read-back verified the same way the prior design's rename action was.
   * "Delete" button: reveals an inline confirmation (warning text + "Yes, delete"/"Cancel") on the same page - no separate confirmation page/step, per the same low-density-screen goal. Confirmed delete calls `remove_subgroup()`, read-back verified, invalidates the `SubgroupIdCache` entry, and redirects to the List view with a success notice.
   * All Groups.io API errors surface in plain language, consistent with the prior design.
+  * **Added 2026-08-12**: an "Add member" control, below the live member list. A search box matching against `MemberIndex`'s existing tracked members by name or email (the same membership-driven model User Assignment already uses - existing PMPro members only, never an arbitrary typed-in email address, per direction), a result list of matches with a checkbox each, and an "Add Selected" button. Submitting queues an add job per selected member for this subgroup via `QueuedExecutionEngine::queue_add()` (section 8) - the same async queued pattern as User Assignment's own Add Groups view, including its existing auto-add-to-parent-group behavior if a selected member isn't already in the parent. Because this is queued rather than synchronous, the member doesn't appear in the live member list above until the job actually runs - the page's existing "Sync" button (section 8) can force this immediately rather than waiting on Action Scheduler's own timing. This is the reverse direction of User Assignment's existing member-first Add Groups flow (start from the group, not the member); both write through the same `queue_add()` path, so there is exactly one place the actual add logic lives.
 
 ### 12. Page: User Assignment
 
@@ -561,8 +563,9 @@ organized and how actions execute, not what the page is fundamentally for.
 * Sticky-override flag read/write logic (now part of the member-index
   table, section 6): `WP_UnitTestCase`-based unit tests against the real
   WordPress test database, per existing convention.
-* The admin page classes (all four, across Feature Controls, Subgroup
-  Management, and User Assignment's three views): unit-tested for their
+* The admin page classes (**five as of 2026-08-12**, across Feature
+  Controls, Subgroup Management, User Assignment's three views, and
+  Plugin Configuration - section 15): unit-tested for their
   data-handling logic (form processing, nonce verification, capability
   checks) using `WP_UnitTestCase`; a manual screen-reader pass by the
   primary contributor is required before any page is considered done, per
@@ -596,3 +599,85 @@ the authoritative source if the two ever diverge:
   a subgroup and view its membership from Subgroup Management — all
   verified against the test group. (Suspend is deferred to Phase 6 — see
   section 4.)
+* **Phase 3, 2026-08-12 amendment**: an admin can reach and use the
+  Plugin Configuration page (section 15); the parent group falls back
+  correctly to the database-backed setting when `GROUPS_IO_PARENT_GROUP`
+  is undefined, and to the constant (read-only in the UI) when it is;
+  the activation notice appears when no parent group is configured by
+  either means and disappears once one is; and an admin can add an
+  existing tracked member to a subgroup directly from that subgroup's
+  Details view (section 11), the add completing asynchronously via the
+  queued execution engine exactly like every other add in the plugin —
+  all verified with a screen reader pass.
+
+### 15. Page: Plugin Configuration — Added 2026-08-12
+
+Resolves the parent-group configuration gap raised when the primary
+contributor requested an admin-level plugin configuration page: today
+`GROUPS_IO_PARENT_GROUP` is `wp-config.php`-only (PRD section 3.1), which
+means a fresh install with no `wp-config.php` edit yet has no working
+parent group at all, and every one of `SubgroupIdCache`,
+`SubgroupManagementPage`, `UserAssignmentPage`,
+`QueuedExecutionEngine`, and `MemberIndex` independently duplicates the
+same `defined( 'GROUPS_IO_PARENT_GROUP' ) ? GROUPS_IO_PARENT_GROUP : ''`
+fallback pattern. This page centralizes that into one resolver and gives
+an admin a way to set the value without editing `wp-config.php`, without
+weakening the existing credential-handling policy (`GROUPS_IO_API_KEY`
+stays constant-only — see `security.md` section 2's 2026-08-12
+exception).
+
+* **Precedence, confirmed with the primary contributor**: `GROUPS_IO_PARENT_GROUP`
+  always wins if defined in `wp-config.php`. The database-backed setting
+  is purely a fallback for when the constant is absent — it is never
+  consulted if the constant is defined, and the admin page's field
+  becomes a read-only display of the constant's value in that case
+  (with explanatory text, matching the existing pattern for
+  constant-driven read-only fields elsewhere in the plugin), not an
+  editable field that would misleadingly imply it does anything.
+* **New centralized resolver**: a single method (e.g.
+  `Settings::get_parent_group(): string`, alongside `Settings`'s
+  existing option-backed getters, or a new dedicated class if a
+  `Settings` addition doesn't fit its existing responsibility - an
+  implementation-level call) replacing the five duplicated
+  `defined() ? GROUPS_IO_PARENT_GROUP : ''` call sites above. Returns
+  the constant if defined, else the new `wp_option` (see below), else
+  `''` (matching every existing call site's current empty-string
+  fallback behavior when unconfigured, so nothing downstream needs to
+  change how it handles "no parent group configured").
+* **Storage**: a new option, `bits_groupsio_parent_group` (matching
+  `Settings::OPTION_NAME`'s naming convention), holding the plain
+  slug string. Not part of `Settings::OPTION_NAME`'s existing single
+  serialized array — a standalone option, since it is conceptually a
+  fallback for a constant, not an operational setting alongside grace
+  period/kill switch/etc. (PRD section 3.2 already draws this same
+  distinction).
+* **Page UI** (`?page=bits-groupsio-plugin-configuration`, single view,
+  no List/Details split needed - one setting):
+  * If `GROUPS_IO_PARENT_GROUP` is defined: the parent group slug shown
+    read-only, with field description text stating it's set via
+    `wp-config.php` and not editable here.
+  * If not defined: an editable text field pre-filled with the current
+    `wp_option` value (empty if never set), plus a "Save" button. Saves
+    via this page's own `load-{hook}` POST handling (matching every
+    other page's "why not inside render()" convention - section 9/11
+    already establish why), with a nonce, `manage_options` capability
+    check, and a success notice on save.
+  * No validation against live Groups.io on save (no API call from this
+    page at all) - a mistyped value simply causes the same
+    `group_not_found`-class errors elsewhere in the plugin that a wrong
+    `wp-config.php` constant value would already cause today. This
+    matches the existing risk model for a constant-driven value
+    (`security.md` section 4's 2026-08-12 Threat Model entry).
+* **Activation notice**: on `admin_init` (checked only on-load, no new
+  activation hook needed), if the resolver above returns `''` (no
+  parent group configured by either means), a persistent admin notice
+  is shown on every wp-admin screen linking to the Plugin Configuration
+  page, matching core WordPress's own standard undismissed-until-resolved
+  admin-notice pattern (e.g. "no permalink structure set"). The notice
+  does not appear once a parent group is configured by either means, and
+  does not appear at all if `GROUPS_IO_PARENT_GROUP` is already defined
+  (nothing to configure in that case). Recommended, lower-effort option
+  from the choices discussed with the primary contributor - not a
+  multi-step setup wizard.
+* Follows the same accessible-admin-UI conventions as every other page
+  (section 9).
