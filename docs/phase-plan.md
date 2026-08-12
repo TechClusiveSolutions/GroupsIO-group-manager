@@ -89,3 +89,9 @@ Approved as a scope expansion on 2026-07-22 (see `CLAUDE.md`'s Scope Discipline 
 * Merge `dev` to `main`, tag `v1.0.0`.
 * Publish the contribution policy and code of conduct (required, since `app` is a public repository).
 * Exit criterion: the release is tagged, release notes are generated, and the plugin is deployed to the live BITS WordPress.com site.
+
+## Post-v1.0 Backlog
+
+Items explicitly scoped as post-release future work, not part of any numbered phase above.
+
+* **Added 2026-08-11**: an in-plugin version of the dev/test data reset-and-repopulate capability currently provided as external tooling (`bin/dev-groupsio-data.sh` - wipes the local member/group index, toggles the dev site between mocked test data and the real dedicated test Groups.io group, and repopulates the local index from whichever is active). An in-plugin equivalent (e.g., an admin-facing control) is explicitly deferred - built as external, non-shipped tooling for now, per direction, since this is a development convenience, not v1 product scope.
