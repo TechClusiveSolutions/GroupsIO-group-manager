@@ -34,15 +34,6 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 	private array $pending_responses = array();
 
 	/**
-	 * Every request queue_responses() intercepted, in order, so a test
-	 * can inspect a specific call's URL/body rather than only the last
-	 * one.
-	 *
-	 * @var array<int, array{url: string, args: array<string, mixed>}>
-	 */
-	private array $captured_requests = array();
-
-	/**
 	 * Queues a sequence of pre_http_request responses, one per call, in
 	 * the order they'll be requested. If a test under-queues responses
 	 * (fewer entries than the code under test actually requests), this
@@ -52,16 +43,10 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 	 */
 	private function queue_responses( array $responses ): void {
 		$this->pending_responses = $responses;
-		$this->captured_requests = array();
 
 		add_filter(
 			'pre_http_request',
 			function ( $preempt, $parsed_args, $url ) {
-				$this->captured_requests[] = array(
-					'url'  => $url,
-					'args' => $parsed_args,
-				);
-
 				if ( empty( $this->pending_responses ) ) {
 					throw new \RuntimeException( "queue_responses() exhausted - the code under test made more HTTP requests than the test queued responses for (URL: {$url})." );
 				}
@@ -81,22 +66,6 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 	 */
 	private function assert_queue_exhausted(): void {
 		$this->assertSame( array(), $this->pending_responses, 'Not every queued HTTP response was consumed by the code under test.' );
-	}
-
-	/**
-	 * Finds the first captured request whose URL contains the given
-	 * endpoint name.
-	 *
-	 * @return array{url: string, args: array<string, mixed>}|null
-	 */
-	private function captured_request_for( string $endpoint ): ?array {
-		foreach ( $this->captured_requests as $request ) {
-			if ( false !== strpos( $request['url'], $endpoint ) ) {
-				return $request;
-			}
-		}
-
-		return null;
 	}
 
 	private function json_response( int $status, array $body ): array {
@@ -269,221 +238,28 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		$this->assertSame( '', $detail );
 	}
 
-	public function test_process_create_name_only_confirms_via_read_back(): void {
-		$this->queue_responses( array(
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+new-subgroup' ) ),
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup' ),
-			) ),
-		) );
-
+	/**
+	 * Per #50: process_create() no longer makes any Groups.io API call
+	 * itself - it only validates the submitted Name and queues the
+	 * actual create (SubgroupExecutionEngine::queue_create()). No
+	 * queue_responses() at all here - if the implementation regressed
+	 * to making a synchronous HTTP call, queue_responses() would throw
+	 * on an unqueued request, per its own "must fail loudly" design.
+	 */
+	public function test_process_create_queues_a_job_and_returns_create_submitted(): void {
 		$_POST['sub_group_name'] = 'new-subgroup';
+		$_POST['title']          = 'New Title';
+		$_POST['description']    = 'A description.';
 		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
 		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
 
 		list( $code, $detail ) = SubgroupManagementPage::process_create();
 
-		unset( $_POST['sub_group_name'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+		unset( $_POST['sub_group_name'], $_POST['title'], $_POST['description'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
 
-		$this->assertSame( 'created', $code );
+		$this->assertSame( 'create_submitted', $code );
 		$this->assertSame( '', $detail );
-	}
-
-	public function test_process_create_with_title_sends_follow_up_update_and_confirms_it(): void {
-		$this->queue_responses( array(
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+new-subgroup' ) ),
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup' ),
-			) ),
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'title' => 'New Title' ) ),
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup', 'New Title' ),
-			) ),
-		) );
-
-		$_POST['sub_group_name'] = 'new-subgroup';
-		$_POST['title']          = 'New Title';
-		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
-		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_create();
-
-		unset( $_POST['sub_group_name'], $_POST['title'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		$this->assertSame( 'created', $code );
-
-		// Every queued response must actually have been consumed - a
-		// short-circuited implementation that returns 'created' right
-		// after the first read-back, never calling updategroup at all,
-		// would otherwise still pass this test.
-		$this->assert_queue_exhausted();
-
-		$title_request = $this->captured_request_for( 'updategroup' );
-		$this->assertNotNull( $title_request, 'Expected a POST to updategroup to set the title.' );
-		$this->assertSame(
-			array(
-				'group_id' => 152999,
-				'title'    => 'New Title',
-			),
-			$title_request['args']['body']
-		);
-	}
-
-	public function test_process_create_reports_desc_mismatch_distinctly_not_as_create_failed(): void {
-		$this->queue_responses( array(
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+new-subgroup' ) ),
-			// Read-back shows the subgroup exists, but its desc doesn't
-			// match what was submitted - e.g. Groups.io ignored or
-			// hasn't yet propagated the description.
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup', '', 'wrong description' ),
-			) ),
-		) );
-
-		$_POST['sub_group_name'] = 'new-subgroup';
-		$_POST['description']    = 'the real description';
-		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
-		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_create();
-
-		unset( $_POST['sub_group_name'], $_POST['description'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		// The subgroup itself was created and confirmed - reporting this
-		// as 'create_failed' would invite a retry that collides with the
-		// subgroup that already exists.
-		$this->assertSame( 'created_desc_failed', $code );
-	}
-
-	public function test_process_create_with_matching_description_succeeds(): void {
-		$this->queue_responses( array(
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+new-subgroup' ) ),
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup', '', 'matching description' ),
-			) ),
-		) );
-
-		$_POST['sub_group_name'] = 'new-subgroup';
-		$_POST['description']    = 'matching description';
-		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
-		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_create();
-
-		unset( $_POST['sub_group_name'], $_POST['description'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		$this->assertSame( 'created', $code );
-	}
-
-	public function test_process_create_still_sets_title_even_when_description_confirmation_fails(): void {
-		$this->queue_responses( array(
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+new-subgroup' ) ),
-			// Read-back: desc doesn't match what was submitted.
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup', '', 'wrong description' ),
-			) ),
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'title' => 'New Title' ) ),
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup', 'New Title', 'wrong description' ),
-			) ),
-		) );
-
-		$_POST['sub_group_name'] = 'new-subgroup';
-		$_POST['title']          = 'New Title';
-		$_POST['description']    = 'the real description';
-		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
-		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_create();
-
-		unset( $_POST['sub_group_name'], $_POST['title'], $_POST['description'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		// The description problem must not silently skip setting the
-		// title the admin also asked for.
-		$this->assertSame( 'created_desc_failed', $code );
-		$this->assert_queue_exhausted();
-
-		$title_request = $this->captured_request_for( 'updategroup' );
-		$this->assertNotNull( $title_request, 'Title must still be set even though description confirmation failed.' );
-		$this->assertSame(
-			array(
-				'group_id' => 152999,
-				'title'    => 'New Title',
-			),
-			$title_request['args']['body']
-		);
-	}
-
-	public function test_process_create_reports_success_when_description_propagates_by_the_second_read_back(): void {
-		$this->queue_responses( array(
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152998, 'name' => 'perception-is-all+another-subgroup' ) ),
-			// First read-back: description hasn't propagated yet.
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152998, 'perception-is-all+another-subgroup', '', '' ),
-			) ),
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152998, 'title' => 'New Title' ) ),
-			// Second read-back (after the title update): the description has
-			// now propagated - this must not be reported as a stale failure.
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152998, 'perception-is-all+another-subgroup', 'New Title', 'the real description' ),
-			) ),
-		) );
-
-		$_POST['sub_group_name'] = 'another-subgroup';
-		$_POST['title']          = 'New Title';
-		$_POST['description']    = 'the real description';
-		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
-		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_create();
-
-		unset( $_POST['sub_group_name'], $_POST['title'], $_POST['description'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		// The description check must be re-evaluated against the later,
-		// fresher read-back taken after the title update, not left stuck
-		// on the stale first read-back's mismatch.
-		$this->assertSame( 'created', $code );
-		$this->assert_queue_exhausted();
-	}
-
-	public function test_process_create_api_failure_returns_friendly_detail(): void {
-		$this->queue_responses( array(
-			$this->json_response( 400, array( 'object' => 'error', 'type' => 'bad_request', 'extra' => 'name already taken' ) ),
-		) );
-
-		$_POST['sub_group_name'] = 'sociology';
-		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
-		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_create();
-
-		unset( $_POST['sub_group_name'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		$this->assertSame( 'create_failed', $code );
-		$this->assertSame( 'name already taken', $detail );
-	}
-
-	public function test_process_create_unexpected_status_error_never_exposes_raw_http_dump(): void {
-		// No 'type' key - this is the shape that makes GroupsIoApiClient
-		// throw with the internal 'unexpected_status' marker and a raw
-		// "HTTP <code>: <body>" string as its extra detail.
-		$this->queue_responses( array(
-			$this->json_response( 400, array( 'object' => 'error' ) ),
-		) );
-
-		$_POST['sub_group_name'] = 'sociology';
-		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
-		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_create();
-
-		unset( $_POST['sub_group_name'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		$this->assertSame( 'create_failed', $code );
-		// Never the raw "HTTP 400: {...}" dump - that's a machine-oriented
-		// detail, not a plain-language message fit for an admin notice.
-		$this->assertStringNotContainsString( 'HTTP', $detail );
-		$this->assertSame( 'an unexpected error occurred.', $detail );
+		$this->assertNotFalse( as_next_scheduled_action( 'bits_groupsio_execute_queued_subgroup_action' ) );
 	}
 
 	// -------------------- process_update() --------------------
@@ -530,16 +306,17 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		$this->assertSame( 'updated', $code );
 	}
 
-	public function test_process_update_sends_only_changed_fields_and_confirms_via_read_back(): void {
-		update_option( 'bits_groupsio_subgroup_cache', array( 'perception-is-all+sociology' => 152360 ) );
-
+	/**
+	 * Per #50: once process_update() has computed a real field diff, it
+	 * queues the actual update_subgroup() call
+	 * (SubgroupExecutionEngine::queue_update()) instead of performing it
+	 * synchronously - only the pre-check listing (to validate the
+	 * id/slug pairing and compute the diff) is a real HTTP call here.
+	 */
+	public function test_process_update_with_changes_queues_a_job_and_returns_update_submitted(): void {
 		$this->queue_responses( array(
 			$this->subgroups_list_response( array(
 				$this->subgroup_row( 152360, 'perception-is-all+sociology', 'Old Title', 'Old desc' ),
-			) ),
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152360, 'title' => 'New Title' ) ),
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152360, 'perception-is-all+sociology', 'New Title', 'Old desc' ),
 			) ),
 		) );
 
@@ -555,63 +332,9 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 
 		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['sub_group_name'], $_POST['title'], $_POST['description'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
 
-		$this->assertSame( 'updated', $code );
-	}
-
-	public function test_process_update_name_change_invalidates_old_slug_cache_entry(): void {
-		update_option( 'bits_groupsio_subgroup_cache', array( 'perception-is-all+old-name' => 152360 ) );
-
-		$this->queue_responses( array(
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152360, 'perception-is-all+old-name' ),
-			) ),
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152360, 'name' => 'perception-is-all+new-name' ) ),
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152360, 'perception-is-all+new-name' ),
-			) ),
-		) );
-
-		$_POST['subgroup_id']    = '152360';
-		$_POST['current_slug']   = 'perception-is-all+old-name';
-		$_POST['sub_group_name'] = 'new-name';
-		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_update_subgroup' );
-		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_update();
-
-		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['sub_group_name'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		$this->assertSame( 'updated', $code );
-
-		$cache = get_option( 'bits_groupsio_subgroup_cache' );
-		$this->assertArrayNotHasKey( 'perception-is-all+old-name', $cache );
-	}
-
-	public function test_process_update_fails_when_read_back_does_not_match(): void {
-		$this->queue_responses( array(
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152360, 'perception-is-all+sociology', 'Old Title' ),
-			) ),
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152360, 'title' => 'New Title' ) ),
-			// Read-back shows the title never actually changed.
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152360, 'perception-is-all+sociology', 'Old Title' ),
-			) ),
-		) );
-
-		$_POST['subgroup_id']    = '152360';
-		$_POST['current_slug']   = 'perception-is-all+sociology';
-		$_POST['sub_group_name'] = 'sociology';
-		$_POST['title']          = 'New Title';
-		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_update_subgroup' );
-		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_update();
-
-		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['sub_group_name'], $_POST['title'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		$this->assertSame( 'update_failed', $code );
-		$this->assertStringContainsString( 'could not be confirmed', $detail );
+		$this->assertSame( 'update_submitted', $code );
+		$this->assert_queue_exhausted();
+		$this->assertNotFalse( as_next_scheduled_action( 'bits_groupsio_execute_queued_subgroup_action' ) );
 	}
 
 	// -------------------- process_delete() --------------------
@@ -635,15 +358,19 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		$this->assertSame( 'not_found', $code );
 	}
 
-	public function test_process_delete_success_confirms_via_read_back_and_invalidates_cache(): void {
-		update_option( 'bits_groupsio_subgroup_cache', array( 'perception-is-all+doomed' => 152361 ) );
-
+	/**
+	 * Per #50: once process_delete()'s pre-check confirms the target
+	 * genuinely exists under the submitted slug, it queues the actual
+	 * remove_subgroup() call and absence confirmation
+	 * (SubgroupExecutionEngine::queue_delete()) instead of performing
+	 * them synchronously - only the pre-check listing is a real HTTP
+	 * call here.
+	 */
+	public function test_process_delete_of_an_existing_target_queues_a_job_and_returns_delete_submitted(): void {
 		$this->queue_responses( array(
 			$this->subgroups_list_response( array(
 				$this->subgroup_row( 152361, 'perception-is-all+doomed' ),
 			) ),
-			$this->json_response( 200, array( 'object' => 'ok' ) ),
-			$this->subgroups_list_response( array() ),
 		) );
 
 		$_POST['subgroup_id']  = '152361';
@@ -655,34 +382,9 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 
 		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
 
-		$this->assertSame( 'deleted', $code );
-
-		$cache = get_option( 'bits_groupsio_subgroup_cache' );
-		$this->assertArrayNotHasKey( 'perception-is-all+doomed', $cache );
-	}
-
-	public function test_process_delete_fails_when_read_back_still_shows_subgroup(): void {
-		$this->queue_responses( array(
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152361, 'perception-is-all+stubborn' ),
-			) ),
-			$this->json_response( 200, array( 'object' => 'ok' ) ),
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152361, 'perception-is-all+stubborn' ),
-			) ),
-		) );
-
-		$_POST['subgroup_id']  = '152361';
-		$_POST['current_slug'] = 'perception-is-all+stubborn';
-		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_delete_subgroup' );
-		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_delete();
-
-		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		$this->assertSame( 'delete_failed', $code );
-		$this->assertStringContainsString( 'could not be confirmed', $detail );
+		$this->assertSame( 'delete_submitted', $code );
+		$this->assert_queue_exhausted();
+		$this->assertNotFalse( as_next_scheduled_action( 'bits_groupsio_execute_queued_subgroup_action' ) );
 	}
 
 	public function test_process_delete_when_target_already_absent_is_idempotent_success(): void {
@@ -737,36 +439,6 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 		$this->assert_queue_exhausted();
 	}
 
-	public function test_process_delete_treats_group_not_found_from_delete_call_as_idempotent_success(): void {
-		update_option( 'bits_groupsio_subgroup_cache', array( 'perception-is-all+racing' => 152370 ) );
-
-		// The pre-check listing is stale and still shows the target (Groups.io
-		// listings are eventually consistent), but the deletegroup call itself
-		// reports it's already gone - a concurrent/earlier delete must have
-		// already succeeded, so this should be treated as success, not failure.
-		$this->queue_responses( array(
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152370, 'perception-is-all+racing' ),
-			) ),
-			$this->json_response( 400, array( 'object' => 'error', 'type' => 'group_not_found', 'extra' => '' ) ),
-		) );
-
-		$_POST['subgroup_id']  = '152370';
-		$_POST['current_slug'] = 'perception-is-all+racing';
-		$_POST['_wpnonce']     = wp_create_nonce( 'bits_groupsio_delete_subgroup' );
-		$_REQUEST['_wpnonce']  = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_delete();
-
-		unset( $_POST['subgroup_id'], $_POST['current_slug'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		$this->assertSame( 'deleted', $code );
-		$this->assert_queue_exhausted();
-
-		$cache = get_option( 'bits_groupsio_subgroup_cache' );
-		$this->assertArrayNotHasKey( 'perception-is-all+racing', $cache );
-	}
-
 	public function test_process_delete_pre_check_lookup_failure_returns_delete_failed_not_deleted(): void {
 		$this->queue_responses( array(
 			$this->json_response( 400, array( 'object' => 'error', 'type' => 'unauthorized_error', 'extra' => '' ) ),
@@ -783,31 +455,6 @@ final class SubgroupManagementPageTest extends WP_UnitTestCase {
 
 		// A failed check must never be reported as a confirmed deletion.
 		$this->assertSame( 'delete_failed', $code );
-	}
-
-	public function test_process_create_title_failure_after_successful_creation_does_not_report_create_failed(): void {
-		$this->queue_responses( array(
-			$this->json_response( 200, array( 'object' => 'group', 'id' => 152999, 'name' => 'perception-is-all+new-subgroup' ) ),
-			$this->subgroups_list_response( array(
-				$this->subgroup_row( 152999, 'perception-is-all+new-subgroup' ),
-			) ),
-			$this->json_response( 400, array( 'object' => 'error', 'type' => 'bad_request', 'extra' => 'title rejected' ) ),
-		) );
-
-		$_POST['sub_group_name'] = 'new-subgroup';
-		$_POST['title']          = 'New Title';
-		$_POST['_wpnonce']       = wp_create_nonce( 'bits_groupsio_create_subgroup' );
-		$_REQUEST['_wpnonce']    = $_POST['_wpnonce'];
-
-		list( $code, $detail ) = SubgroupManagementPage::process_create();
-
-		unset( $_POST['sub_group_name'], $_POST['title'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
-
-		// The subgroup itself was created and confirmed - reporting this
-		// as 'create_failed' would invite a retry that collides with the
-		// subgroup that already exists.
-		$this->assertSame( 'created_title_failed', $code );
-		$this->assertSame( 'title rejected', $detail );
 	}
 
 	public function test_process_update_pre_check_lookup_failure_returns_update_failed_not_not_found(): void {

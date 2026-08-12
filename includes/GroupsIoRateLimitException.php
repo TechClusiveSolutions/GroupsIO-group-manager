@@ -47,4 +47,14 @@ final class GroupsIoRateLimitException extends GroupsIoApiException {
 	public function get_retry_after_seconds(): int {
 		return $this->retry_after_seconds;
 	}
+
+	/**
+	 * Overrides the base class - "extra" here holds a numeric
+	 * retry-after value, not human-readable text.
+	 *
+	 * @return string
+	 */
+	public function friendly_message(): string {
+		return __( 'Groups.io is rate-limiting requests right now. Please try again shortly.', 'bits-groupsio-sync' );
+	}
 }

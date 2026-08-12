@@ -68,4 +68,29 @@ class GroupsIoApiException extends \RuntimeException {
 	public function get_extra(): string {
 		return $this->extra;
 	}
+
+	/**
+	 * Formats this exception as plain language, never a raw API error
+	 * dump or machine-oriented error type/code - the single shared
+	 * implementation of the "never expose a raw error to an admin"
+	 * requirement (originally SubgroupManagementPage's own
+	 * friendly_error(), extracted here once SubgroupExecutionEngine
+	 * needed the identical logic - see
+	 * subgroup-crud-and-admin-pages-design.md section 8). 'unexpected_status'
+	 * carries a raw HTTP status/body dump in its extra field (see
+	 * GroupsIoApiClient::request()), not a Groups.io-authored
+	 * human-readable detail like every other error type, so it's never
+	 * surfaced verbatim. GroupsIoRateLimitException overrides this with
+	 * its own fixed message, since its "extra" field holds a numeric
+	 * retry-after value, not human-readable text.
+	 *
+	 * @return string
+	 */
+	public function friendly_message(): string {
+		if ( 'unexpected_status' === $this->error_type ) {
+			return __( 'an unexpected error occurred.', 'bits-groupsio-sync' );
+		}
+
+		return '' !== $this->extra ? $this->extra : __( 'an unexpected error occurred.', 'bits-groupsio-sync' );
+	}
 }
