@@ -257,11 +257,17 @@ final class UserAssignmentPage {
 	 * verifies the nonce, then re-validates the submitted subgroup id is
 	 * both one of this member's own indexed rows and actually the
 	 * parent group (never trusting a client-submitted id blindly)
-	 * before queuing the remove job. Independently re-checks
+	 * before queuing anything. Independently re-checks
 	 * `MemberIndex::is_owner_of_parent()` here too, rather than trusting
 	 * process_remove_selected()'s earlier check alone - defense in
 	 * depth against the member's owner status changing between the two
-	 * requests (e.g. a re-sync completing in between).
+	 * requests (e.g. a re-sync completing in between). Per #104 and the
+	 * confirmation copy's own promise ("removes this member from all of
+	 * BITS' Groups.io presence, not just one list"), queues a remove for
+	 * every one of the member's currently-indexed groups (parent and all
+	 * subgroups), not just the parent row - `get_member_groups()` already
+	 * excludes any row carrying a `removed` override, so this list never
+	 * includes memberships an admin already deliberately removed.
 	 *
 	 * @return array{email: string, invalid: bool, owner_blocked: bool}
 	 */
@@ -306,7 +312,10 @@ final class UserAssignmentPage {
 			);
 		}
 
-		QueuedExecutionEngine::queue_remove( $email, $subgroup_id, get_current_user_id() );
+		$admin_user_id = get_current_user_id();
+		foreach ( $groups as $group ) {
+			QueuedExecutionEngine::queue_remove( $email, $group['subgroup_id'], $admin_user_id );
+		}
 
 		return array(
 			'email'         => $email,

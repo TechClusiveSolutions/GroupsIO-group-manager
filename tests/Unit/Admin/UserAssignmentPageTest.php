@@ -402,6 +402,36 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		$this->assertNotFalse( as_next_scheduled_action( self::HOOK ) );
 	}
 
+	public function test_process_confirm_parent_remove_also_queues_removal_from_every_subgroup(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 3, 'perception-is-all+testgroup', 'Test Group', 1 );
+
+		$_POST['member']      = 'target@example.test';
+		$_POST['subgroup_id'] = '1';
+		$_POST['_wpnonce']    = wp_create_nonce( 'bits_groupsio_confirm_parent_remove' );
+		$_REQUEST['_wpnonce'] = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_confirm_parent_remove();
+
+		unset( $_POST['member'], $_POST['subgroup_id'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertFalse( $result['invalid'] );
+
+		$scheduled = as_get_scheduled_actions(
+			array(
+				'hook'     => self::HOOK,
+				'status'   => 'pending',
+				'per_page' => -1,
+			)
+		);
+		$this->assertCount(
+			3,
+			$scheduled,
+			'Confirming the parent removal must queue a remove for the parent and every subgroup the member belongs to, per #104.'
+		);
+	}
+
 	public function test_process_confirm_parent_remove_rejects_a_non_parent_subgroup_id(): void {
 		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
 		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 2, 'perception-is-all+announcements', 'Announcements', 1 );
