@@ -824,10 +824,10 @@ final class UserAssignmentPage {
 	private static function render_group_row( string $email, array $group ): void {
 		$checkbox_id = 'bits-groupsio-group-' . $group['subgroup_id'];
 		$label       = sprintf(
-			/* translators: 1: group title, 2: group slug/namespace. */
+			/* translators: 1: group title, 2: group slug/namespace, reordered subgroup+parent. */
 			__( '%1$s (%2$s)', 'bits-groupsio-sync' ),
 			'' !== $group['subgroup_title'] ? $group['subgroup_title'] : self::subgroup_name_segment( $group['subgroup_slug'] ),
-			$group['subgroup_slug']
+			self::reversed_slug_for_display( $group['subgroup_slug'] )
 		);
 
 		echo '<tr>';
@@ -858,9 +858,10 @@ final class UserAssignmentPage {
 	 * Extracts the "sub" segment from a "parent+sub" slug, for the
 	 * fallback label a titleless group's row uses (#98) - the subgroup's
 	 * own name should lead the label, not the full parent+sub slug
-	 * (which is still shown in full as the label's parenthesized
-	 * context, per render_group_row()/render_addable_group_table()).
-	 * Mirrors SubgroupManagementPage's own identical helper.
+	 * (which is still shown as the label's parenthesized context, per
+	 * render_group_row()/render_addable_group_table(), but reordered -
+	 * see reversed_slug_for_display()). Mirrors SubgroupManagementPage's
+	 * own identical helper.
 	 *
 	 * @param string $slug Full slug.
 	 * @return string
@@ -869,6 +870,31 @@ final class UserAssignmentPage {
 		$pos = strpos( $slug, '+' );
 
 		return false === $pos ? $slug : substr( $slug, $pos + 1 );
+	}
+
+	/**
+	 * Reorders a "parent+sub" slug to "sub+parent" for display in a
+	 * group label's parenthesized context (#98 follow-up) - confirmed
+	 * with the primary contributor that the subgroup segment should lead
+	 * even in this secondary, fuller-context part of the label, not just
+	 * the primary title/name fallback subgroup_name_segment() already
+	 * handles. This is purely a display transformation - never used as
+	 * an actual Groups.io slug/address (the real address is always
+	 * parent-first; nothing here is sent back to the API or used to
+	 * look anything up). The parent group's own row (no '+' in its slug)
+	 * is returned unchanged, since there's nothing to reorder.
+	 *
+	 * @param string $slug Full slug, "parent+sub" form (or a bare parent slug).
+	 * @return string
+	 */
+	private static function reversed_slug_for_display( string $slug ): string {
+		$pos = strpos( $slug, '+' );
+
+		if ( false === $pos ) {
+			return $slug;
+		}
+
+		return substr( $slug, $pos + 1 ) . '+' . substr( $slug, 0, $pos );
 	}
 
 	/**
@@ -1158,10 +1184,10 @@ final class UserAssignmentPage {
 		foreach ( $groups as $group ) {
 			$checkbox_id = 'bits-groupsio-addable-' . $group['subgroup_id'];
 			$label       = sprintf(
-				/* translators: 1: group title, 2: group slug/namespace. */
+				/* translators: 1: group title, 2: group slug/namespace, reordered subgroup+parent. */
 				__( '%1$s (%2$s)', 'bits-groupsio-sync' ),
 				'' !== $group['subgroup_title'] ? $group['subgroup_title'] : self::subgroup_name_segment( $group['subgroup_slug'] ),
-				$group['subgroup_slug']
+				self::reversed_slug_for_display( $group['subgroup_slug'] )
 			);
 
 			echo '<tr>';
