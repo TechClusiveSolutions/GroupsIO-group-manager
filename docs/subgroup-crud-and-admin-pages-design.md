@@ -266,6 +266,34 @@ subgroup on every page load or search.
   asked (that behavior is unverified and out of scope for this
   safeguard to depend on — the block applies unconditionally, not only
   when the live API would also reject it).
+* **Schema self-healing — added 2026-08-13**: `register_activation_hook`
+  is not a fully reliable guarantee that `MemberIndex::create_table()`
+  actually runs. Confirmed via direct reproduction on a from-scratch
+  `wp-env` instance (matching CI's own always-fresh container setup):
+  across two otherwise identical fresh-bootstrap runs of the same setup
+  command sequence, one left `bits_groupsio_member_index` missing
+  entirely after `wp plugin activate` reported success, while
+  `bits_groupsio_audit`'s own `dbDelta()` call (the *first* of the two
+  `register_activation_hook` callbacks registered in
+  `group-manager.php`) succeeded both times. No PHP error or warning was
+  ever produced by either run, even with `WP_DEBUG`/`SCRIPT_DEBUG` on —
+  `dbDelta()` does not throw or otherwise surface a failure to create a
+  table, so nothing in application code could previously have caught
+  this. Manually re-running `create_table()`, or a plain WP-CLI
+  deactivate/reactivate cycle against an already-provisioned install,
+  always succeeded — the gap is specific to first-time activation
+  timing on a brand-new database, not the SQL or the dbDelta call
+  itself. Rather than continue chasing the exact MySQL-level trigger
+  (expensive to reproduce — each fresh-bootstrap cycle took several
+  minutes, and the race didn't reproduce every time), `MemberIndex` now
+  self-heals: on every `plugins_loaded` (not only at activation), it
+  checks a stored schema-version option against `SHOW TABLES`
+  cheaply — one indexed lookup, not a `dbDelta()` call on every request
+  — and re-runs `create_table()` if the table is missing or the stored
+  version is stale. This is a standard defensive pattern for exactly
+  this class of problem (activation hooks are known to be unreliable
+  across various hosting/multisite/container scenarios) and fixes the
+  symptom regardless of the precise root cause.
 
 ### 7. Audit Log Recording — `AuditLog::record()`
 
