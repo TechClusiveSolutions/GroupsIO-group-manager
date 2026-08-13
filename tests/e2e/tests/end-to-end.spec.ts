@@ -41,7 +41,7 @@ test( 'login through a full subgroup create/update/delete lifecycle', async ( { 
 		await expect( page.getByRole( 'heading', { name: 'Create Subgroup' } ) ).toBeVisible();
 
 		await page.getByLabel( 'Name', { exact: true } ).fill( initialName );
-		await page.getByRole( 'button', { name: 'Create', exact: true } ).click();
+		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
 
 		await expect( page.getByText( 'Subgroup created.' ) ).toBeVisible();
 		await expect( page.getByRole( 'link', { name: new RegExp( `${ initialName }@` ) } ) ).toBeVisible();
