@@ -32,6 +32,14 @@ final class MemberIndex {
 
 	private const SYNC_HOOK = 'bits_groupsio_sync_member_index';
 
+	// Bumped whenever create_table()'s schema changes, so ensure_table()
+	// (self-heal check, see register()) knows to re-run dbDelta() even
+	// when the table already exists (e.g. after adding a column) - not
+	// just when it's missing entirely.
+	private const SCHEMA_VERSION = '1';
+
+	private const SCHEMA_VERSION_OPTION = 'bits_groupsio_member_index_schema_version';
+
 	/**
 	 * Returns the fully-prefixed member-index table name.
 	 *
@@ -89,6 +97,39 @@ final class MemberIndex {
 		) $charset_collate;";
 
 		dbDelta( $sql );
+
+		update_option( self::SCHEMA_VERSION_OPTION, self::SCHEMA_VERSION );
+	}
+
+	/**
+	 * Self-heals the member-index table on every request, since
+	 * register_activation_hook is not a fully reliable guarantee that
+	 * create_table() actually ran - confirmed via direct reproduction on
+	 * a from-scratch wp-env instance, where the table was intermittently
+	 * left missing after `wp plugin activate` reported success, with no
+	 * PHP error or warning produced. See
+	 * docs/subgroup-crud-and-admin-pages-design.md section 6's "Schema
+	 * self-healing" note (issue #108). The stored option is checked
+	 * first so the common case (table already present, current schema)
+	 * costs one autoloaded option read, not a query - only a version
+	 * mismatch or missing option (including a schema-predating-this-check
+	 * install, or the table missing outright) falls through to
+	 * create_table(); dbDelta() is idempotent, so re-running it is
+	 * always safe.
+	 *
+	 * @return void
+	 */
+	public static function ensure_table(): void {
+		if ( self::SCHEMA_VERSION === get_option( self::SCHEMA_VERSION_OPTION ) ) {
+			return;
+		}
+
+		// Version mismatch (including "never set", e.g. an install
+		// predating this self-heal check, or the table missing outright
+		// after a failed activation) - re-running is always safe,
+		// dbDelta() only adds/alters what's actually different and
+		// never drops data.
+		self::create_table();
 	}
 
 	/**
@@ -99,6 +140,8 @@ final class MemberIndex {
 	 * @return void
 	 */
 	public static function register(): void {
+		self::ensure_table();
+
 		add_action( self::SYNC_HOOK, array( self::class, 'sync' ) );
 		add_action( 'pmpro_after_all_membership_level_changes', array( self::class, 'clear_overrides_for_user' ) );
 
