@@ -345,4 +345,28 @@ final class QueuedExecutionEngineTest extends WP_UnitTestCase {
 	public function test_process_due_jobs_returns_an_int(): void {
 		$this->assertGreaterThanOrEqual( 0, QueuedExecutionEngine::process_due_jobs() );
 	}
+
+	/**
+	 * #99's follow-up: the "Sync" button previously only processed
+	 * already-due queued jobs, which never included MemberIndex::sync()
+	 * itself (only hourly-scheduled) - a subgroup created via Subgroup
+	 * Management wasn't addable on User Assignment until the next hourly
+	 * sync, and clicking "Sync" didn't help. process_due_jobs() now
+	 * forces MemberIndex::sync() to run directly, confirmed here via the
+	 * same pre_http_request capture the other tests in this file use -
+	 * a getgroup call is sync()'s first live API call, so its presence
+	 * confirms sync() genuinely ran rather than process_due_jobs() only
+	 * returning early.
+	 */
+	public function test_process_due_jobs_forces_a_member_index_sync(): void {
+		// A zero/absent id makes MemberIndex::sync() return immediately
+		// after this one call, keeping the assertion focused on "did
+		// sync() run at all" without needing to mock its full call chain.
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 0 ) ) );
+
+		QueuedExecutionEngine::process_due_jobs();
+
+		$this->assertNotNull( self::$last_request, 'process_due_jobs() never made an HTTP request - MemberIndex::sync() did not run.' );
+		$this->assertStringContainsString( 'getgroup', self::$last_request['url'] );
+	}
 }

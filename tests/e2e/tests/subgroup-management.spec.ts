@@ -44,8 +44,12 @@ test.describe( 'Subgroup Management edge cases', () => {
 		await page.getByRole( 'link', { name: /fixture-subgroup@/ } ).click();
 
 		await expect( page.getByRole( 'heading', { name: 'Subgroup Details' } ) ).toBeVisible();
-		await expect( page.getByText( 'fixture-member-1@example.test' ) ).toBeVisible();
-		await expect( page.getByText( 'fixture-member-2@example.test' ) ).toBeVisible();
+		// exact: true - the Sync control's own reconciliation (#100) can leave
+		// a persistent "Added ... to the group." notice from an earlier
+		// step/test, which a loose substring match would also match; exact
+		// matching resolves only the member list's <li>.
+		await expect( page.getByText( 'fixture-member-1@example.test', { exact: true } ) ).toBeVisible();
+		await expect( page.getByText( 'fixture-member-2@example.test', { exact: true } ) ).toBeVisible();
 
 		await page.getByLabel( 'Title (optional)' ).fill( 'Fixture Title' );
 		await page.getByRole( 'button', { name: 'Update' } ).click();
