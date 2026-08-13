@@ -33,6 +33,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 const BITS_E2E_MOCK_FAKE_KEYS = array( 'fake-local-dev-key-not-real', 'fake-test-key-not-real' );
 const BITS_E2E_MOCK_OPTION    = 'bits_groupsio_e2e_mock_subgroups';
+// Matches the id getgroup() below has always returned - real Groups.io's
+// parent group is itself just a group, queryable via getmembers like any
+// subgroup, so the mock tracks its membership the same way (in a
+// separate parent_members list, since it is never part of getsubgroups()'
+// own results).
+const BITS_E2E_MOCK_PARENT_ID  = 999999;
 
 if ( ! defined( 'GROUPS_IO_API_KEY' ) || ! in_array( GROUPS_IO_API_KEY, BITS_E2E_MOCK_FAKE_KEYS, true ) ) {
 	return;
@@ -53,8 +59,9 @@ function bits_e2e_mock_get_state(): array {
 	if ( null === $state ) {
 		$parent = defined( 'GROUPS_IO_PARENT_GROUP' ) ? GROUPS_IO_PARENT_GROUP : 'bits-local-dev';
 		$state  = array(
-			'next_id'   => 200002,
-			'subgroups' => array(
+			'next_id'        => 200002,
+			'parent_members' => array(),
+			'subgroups'      => array(
 				200001 => array(
 					'id'         => 200001,
 					'name'       => $parent . '+fixture-subgroup',
@@ -162,7 +169,7 @@ add_filter(
 			case 'getgroup':
 				$parent = defined( 'GROUPS_IO_PARENT_GROUP' ) ? GROUPS_IO_PARENT_GROUP : 'bits-local-dev';
 				return bits_e2e_mock_response( 200, array(
-					'id'            => 999999,
+					'id'            => BITS_E2E_MOCK_PARENT_ID,
 					'object'        => 'group',
 					'name'          => $parent,
 					'title'         => '',
@@ -180,6 +187,12 @@ add_filter(
 
 			case 'getmembers':
 				$group_id = (int) ( $params['group_id'] ?? 0 );
+				if ( BITS_E2E_MOCK_PARENT_ID === $group_id ) {
+					return bits_e2e_mock_response( 200, array(
+						'object' => 'list',
+						'data'   => $state['parent_members'],
+					) );
+				}
 				if ( ! isset( $state['subgroups'][ $group_id ] ) ) {
 					return bits_e2e_mock_error( 'group_not_found' );
 				}
@@ -259,13 +272,16 @@ add_filter(
 				}
 
 				foreach ( $subgroup_ids as $group_id ) {
-					if ( ! isset( $state['subgroups'][ $group_id ] ) ) {
+					$is_parent = BITS_E2E_MOCK_PARENT_ID === $group_id;
+					if ( ! $is_parent && ! isset( $state['subgroups'][ $group_id ] ) ) {
 						continue;
 					}
 
 					foreach ( $emails as $email ) {
+						$existing_members = $is_parent ? $state['parent_members'] : $state['subgroups'][ $group_id ]['members'];
+
 						$already_member = false;
-						foreach ( $state['subgroups'][ $group_id ]['members'] as $member ) {
+						foreach ( $existing_members as $member ) {
 							if ( $member['email'] === $email ) {
 								$already_member = true;
 								break;
@@ -275,12 +291,18 @@ add_filter(
 							continue;
 						}
 
-						$state['subgroups'][ $group_id ]['members'][] = array(
+						$new_member = array(
 							'id'    => $state['next_member_id'],
 							'email' => $email,
 						);
 						$state['next_member_id']++;
-						$state['subgroups'][ $group_id ]['subs_count']++;
+
+						if ( $is_parent ) {
+							$state['parent_members'][] = $new_member;
+						} else {
+							$state['subgroups'][ $group_id ]['members'][] = $new_member;
+							$state['subgroups'][ $group_id ]['subs_count']++;
+						}
 					}
 				}
 				bits_e2e_mock_save_state( $state );
@@ -289,6 +311,14 @@ add_filter(
 
 			case 'removemember':
 				$member_info_id = (int) ( $params['member_info_id'] ?? 0 );
+
+				foreach ( $state['parent_members'] as $index => $member ) {
+					if ( (int) $member['id'] === $member_info_id ) {
+						unset( $state['parent_members'][ $index ] );
+						$state['parent_members'] = array_values( $state['parent_members'] );
+						break;
+					}
+				}
 
 				foreach ( $state['subgroups'] as $group_id => $subgroup ) {
 					foreach ( $subgroup['members'] as $index => $member ) {
