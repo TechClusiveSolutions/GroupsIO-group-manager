@@ -29,7 +29,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  * these jobs - it delegates the actual index update to
  * MemberIndex::apply_add()/apply_remove(), the audit write to
  * AuditLog::record(), and the admin-facing outcome to
- * AdminNotifications::add().
+ * AdminNotifications::add(). process_due_jobs() (the admin-facing
+ * "Sync" control's handler) is the one exception - it also forces
+ * MemberIndex::sync() itself to run, per #99's follow-up, since that's
+ * the one other on-demand "make everything current now" action the
+ * Sync button needs to cover.
  */
 final class QueuedExecutionEngine {
 
@@ -332,18 +336,38 @@ final class QueuedExecutionEngine {
 	}
 
 	/**
-	 * Forces Action Scheduler to process any currently-due queued jobs
-	 * immediately, rather than waiting on WP-Cron's own timing. A thin
-	 * wrapper around Action Scheduler's own queue runner - the same call
-	 * WP-Cron itself uses to process due actions - not a reimplementation
-	 * of queue-draining logic. Not scoped to this plugin's own hook or to
-	 * any particular member/page; it runs whatever Action Scheduler
-	 * considers due, system-wide. Backs the admin-facing "Sync" control
-	 * on the GroupsIO Management pages.
+	 * Backs the admin-facing "Sync" control on the GroupsIO Management
+	 * pages: forces MemberIndex::sync() to run right now (it's normally
+	 * only hourly-scheduled, per MemberIndex::maybe_schedule_sync()), then
+	 * forces Action Scheduler to process any currently-due queued jobs
+	 * immediately, rather than waiting on WP-Cron's own timing - this
+	 * picks up not only pre-existing pending jobs but also any add jobs
+	 * MemberIndex::sync()'s own parent-group reconciliation step (#100)
+	 * just queued, in the same click. Direct, synchronous calls (not
+	 * queued themselves) - the admin clicking "Sync" is explicitly asking
+	 * to wait for this to happen now, the same tradeoff every other
+	 * "Sync" click already makes.
 	 *
-	 * @return int Number of actions processed.
+	 * Found via manual testing (#99's follow-up): a subgroup created via
+	 * Subgroup Management wasn't addable on User Assignment until the
+	 * next hourly sync, and the "Sync" button didn't help, since it only
+	 * ever processed already-due queued jobs - MemberIndex::sync() itself
+	 * was never "due" outside its own hourly schedule.
+	 *
+	 * The Action Scheduler portion is a thin wrapper around Action
+	 * Scheduler's own queue runner - the same call WP-Cron itself uses to
+	 * process due actions - not a reimplementation of queue-draining
+	 * logic. Not scoped to this plugin's own hook or to any particular
+	 * member/page; it runs whatever Action Scheduler considers due,
+	 * system-wide.
+	 *
+	 * @return int Number of queued actions processed (MemberIndex::sync()
+	 *             itself isn't counted here - only jobs Action Scheduler
+	 *             actually ran, which may include some sync() just queued).
 	 */
 	public static function process_due_jobs(): int {
+		MemberIndex::sync();
+
 		if ( ! class_exists( 'ActionScheduler_QueueRunner' ) ) {
 			return 0;
 		}

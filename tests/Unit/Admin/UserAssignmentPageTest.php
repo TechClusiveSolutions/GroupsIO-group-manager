@@ -233,7 +233,7 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		UserAssignmentPage::render();
 		$output = ob_get_clean();
 
-		$this->assertStringContainsString( 'Announcements (perception-is-all+announcements)', $output );
+		$this->assertStringContainsString( 'Announcements (announcements+perception-is-all)', $output );
 	}
 
 	public function test_details_view_shows_pmpro_expected_and_override_state_as_text(): void {
@@ -468,7 +468,7 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		UserAssignmentPage::render();
 		$output = ob_get_clean();
 
-		$this->assertStringContainsString( 'Announcements (perception-is-all+announcements)', $output );
+		$this->assertStringContainsString( 'Announcements (announcements+perception-is-all)', $output );
 	}
 
 	public function test_add_groups_view_excludes_groups_the_member_is_already_in(): void {
@@ -483,7 +483,7 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		UserAssignmentPage::render();
 		$output = ob_get_clean();
 
-		$this->assertStringContainsString( 'Announcements (perception-is-all+announcements)', $output );
+		$this->assertStringContainsString( 'Announcements (announcements+perception-is-all)', $output );
 		$this->assertStringNotContainsString( 'perception-is-all (perception-is-all)', $output );
 	}
 

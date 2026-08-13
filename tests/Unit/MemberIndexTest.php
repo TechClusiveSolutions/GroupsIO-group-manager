@@ -144,6 +144,65 @@ final class MemberIndexTest extends WP_UnitTestCase {
 		$this->assertSame( 'perception-is-all+announcements', $row['subgroup_slug'] );
 	}
 
+	/**
+	 * #99: a subgroup with zero real members previously produced zero
+	 * rows at all from sync_subgroup(), making it permanently invisible
+	 * to get_addable_groups() (which derives its universe purely from
+	 * existing rows) no matter how many sync runs passed. sync_subgroup()
+	 * now always upserts one memberless "anchor" row (email = '') per
+	 * subgroup_id in addition to any real member rows.
+	 */
+	public function test_sync_creates_an_anchor_row_for_a_subgroup_with_zero_members(): void {
+		$this->queue_responses( array(
+			$this->group_response( 900001, 'perception-is-all' ),
+			$this->members_list_response( array() ),
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 900002, 'perception-is-all+empty-subgroup', 'Empty Subgroup' ),
+			) ),
+			$this->members_list_response( array() ),
+		) );
+
+		MemberIndex::sync();
+
+		global $wpdb;
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT * FROM " . MemberIndex::table_name() . " WHERE email = '' AND subgroup_id = %d",
+				900002
+			),
+			ARRAY_A
+		);
+
+		$this->assertNotNull( $row, 'sync_subgroup() must upsert an anchor row even when the subgroup has zero real members.' );
+		$this->assertSame( 'perception-is-all+empty-subgroup', $row['subgroup_slug'] );
+		$this->assertSame( 'Empty Subgroup', $row['subgroup_title'] );
+	}
+
+	/**
+	 * The actual bug report (#99, found via manual testing): a newly
+	 * created subgroup with zero members never appeared as addable for
+	 * any member, confirmed here end-to-end via a real sync() run rather
+	 * than directly seeding rows with apply_add() (which wouldn't have
+	 * exercised sync_subgroup()'s anchor-row path at all).
+	 */
+	public function test_get_addable_groups_includes_a_subgroup_synced_with_zero_members(): void {
+		$this->queue_responses( array(
+			$this->group_response( 900001, 'perception-is-all' ),
+			$this->members_list_response( array( $this->member_row( 'target@example.test' ) ) ),
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 900002, 'perception-is-all+brand-new', 'Brand New' ),
+			) ),
+			$this->members_list_response( array() ),
+		) );
+
+		MemberIndex::sync();
+
+		$rows  = MemberIndex::get_addable_groups( 'target@example.test', 1, 20 );
+		$slugs = array_column( $rows, 'subgroup_slug' );
+
+		$this->assertContains( 'perception-is-all+brand-new', $slugs );
+	}
+
 	public function test_sync_flags_global_mandatory_group_as_expected_even_without_a_matched_wp_user(): void {
 		update_option( 'bits_groupsio_sync_settings', array( 'global_mandatory_groups' => array( 'perception-is-all+announcements' ) ) );
 
@@ -396,6 +455,40 @@ final class MemberIndexTest extends WP_UnitTestCase {
 		$this->assertSame( 1, MemberIndex::count_members( 'announcements' ) );
 	}
 
+	/**
+	 * #99: an anchor row (email = '', written by sync_subgroup() for an
+	 * empty subgroup) must never be counted as a real member - it's a
+	 * pure "this subgroup exists" marker, not a person.
+	 */
+	public function test_count_members_excludes_anchor_rows(): void {
+		global $wpdb;
+		$wpdb->insert( MemberIndex::table_name(), array(
+			'email' => '', 'subgroup_id' => 1, 'subgroup_slug' => 'perception-is-all+empty',
+			'synced_at' => current_time( 'mysql', true ),
+		) );
+		MemberIndex::apply_add( 0, 'real@example.test', 'Real', 2, 'perception-is-all', '', 1 );
+
+		$this->assertSame( 1, MemberIndex::count_members() );
+	}
+
+	/**
+	 * Same rationale as test_count_members_excludes_anchor_rows() - a
+	 * search term matching the anchor row's own subgroup_slug/title
+	 * must not surface a phantom blank-email "member" in the results.
+	 */
+	public function test_get_members_page_excludes_anchor_rows_even_when_search_matches_their_subgroup(): void {
+		global $wpdb;
+		$wpdb->insert( MemberIndex::table_name(), array(
+			'email' => '', 'subgroup_id' => 1, 'subgroup_slug' => 'perception-is-all+empty', 'subgroup_title' => 'Empty',
+			'synced_at' => current_time( 'mysql', true ),
+		) );
+		MemberIndex::apply_add( 0, 'real@example.test', 'Real', 2, 'perception-is-all', '', 1 );
+
+		$rows = MemberIndex::get_members_page( 1, 20, 'Empty' );
+
+		$this->assertSame( array(), $rows );
+	}
+
 	public function test_get_members_page_returns_name_email_and_total_group_count(): void {
 		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 1, 'perception-is-all', '', 1 );
 		MemberIndex::apply_add( 0, 'alice@example.test', 'Alice', 2, 'perception-is-all+announcements', '', 1 );
@@ -637,6 +730,106 @@ final class MemberIndexTest extends WP_UnitTestCase {
 
 		$this->assertSame( 1, $group['subgroup_id'] );
 		$this->assertSame( 'Perception Is All', $group['subgroup_title'] );
+	}
+
+	/**
+	 * Counts scheduled QueuedExecutionEngine jobs mentioning $email in
+	 * their args - filters by a unique-per-test email rather than a
+	 * global count, since Action Scheduler's own tables aren't covered
+	 * by WP_UnitTestCase's per-test transaction rollback (matching the
+	 * same helper/rationale in QueuedExecutionEngineTest).
+	 */
+	private function count_scheduled_add_jobs_for_email( string $email ): int {
+		global $wpdb;
+
+		$like = '%' . $wpdb->esc_like( $email ) . '%';
+
+		return (int) $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT COUNT(*) FROM {$wpdb->prefix}actionscheduler_actions WHERE hook = %s AND ( args LIKE %s OR extended_args LIKE %s )",
+				'bits_groupsio_execute_queued_action',
+				$like,
+				$like
+			)
+		);
+	}
+
+	/**
+	 * #100: a member present in a subgroup but missing from the parent
+	 * group must get queued for an add to the parent - normally this
+	 * would happen at PMPro signup time (Phase 4, not yet built), so
+	 * nothing else currently guarantees it.
+	 */
+	public function test_sync_reconciles_a_member_missing_from_the_parent_group(): void {
+		$email = 'missing-from-parent@example.test';
+
+		$this->queue_responses( array(
+			$this->group_response( 900001, 'perception-is-all' ),
+			// Parent's own member list does NOT include $email.
+			$this->members_list_response( array() ),
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 900002, 'perception-is-all+list', 'List' ),
+			) ),
+			// But the subgroup's member list does.
+			$this->members_list_response( array( $this->member_row( $email ) ) ),
+		) );
+
+		MemberIndex::sync();
+
+		$this->assertSame( 1, $this->count_scheduled_add_jobs_for_email( $email ) );
+	}
+
+	/**
+	 * Idempotent across runs: a member already in the parent group must
+	 * not be re-queued.
+	 */
+	public function test_sync_does_not_reconcile_a_member_already_in_the_parent_group(): void {
+		$email = 'already-in-parent@example.test';
+
+		$this->queue_responses( array(
+			$this->group_response( 900001, 'perception-is-all' ),
+			// Parent's own member list DOES include $email.
+			$this->members_list_response( array( $this->member_row( $email ) ) ),
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 900002, 'perception-is-all+list', 'List' ),
+			) ),
+			$this->members_list_response( array( $this->member_row( $email ) ) ),
+		) );
+
+		MemberIndex::sync();
+
+		$this->assertSame( 0, $this->count_scheduled_add_jobs_for_email( $email ) );
+	}
+
+	/**
+	 * A member an admin has deliberately removed from the parent group
+	 * must not be silently re-added by reconciliation - the sticky
+	 * 'removed' override on their parent-group row is respected.
+	 */
+	public function test_sync_does_not_reconcile_a_member_with_a_removed_override_on_the_parent_row(): void {
+		$email = 'deliberately-removed@example.test';
+
+		global $wpdb;
+		$wpdb->insert( MemberIndex::table_name(), array(
+			'email' => $email, 'subgroup_id' => 900001, 'subgroup_slug' => 'perception-is-all',
+			'override_type' => 'removed', 'override_by' => 1, 'override_at' => current_time( 'mysql', true ),
+			'synced_at' => current_time( 'mysql', true ),
+		) );
+
+		$this->queue_responses( array(
+			$this->group_response( 900001, 'perception-is-all' ),
+			// Parent's own member list does not include $email - Groups.io
+			// itself already agrees they're not a parent member.
+			$this->members_list_response( array() ),
+			$this->subgroups_list_response( array(
+				$this->subgroup_row( 900002, 'perception-is-all+list', 'List' ),
+			) ),
+			$this->members_list_response( array( $this->member_row( $email ) ) ),
+		) );
+
+		MemberIndex::sync();
+
+		$this->assertSame( 0, $this->count_scheduled_add_jobs_for_email( $email ), 'A removed override on the parent row must be respected, not silently overridden by reconciliation.' );
 	}
 
 	public function test_find_group_by_slug_returns_null_when_never_indexed(): void {
