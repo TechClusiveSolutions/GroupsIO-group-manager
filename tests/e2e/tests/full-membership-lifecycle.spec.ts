@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 /**
  * A full member-lifecycle walkthrough spanning both admin surfaces this
@@ -71,6 +71,47 @@ function seedMemberInParentOnly( email: string, displayName: string ): void {
 			`$state['parent_members'][] = array( 'id' => 800001, 'email' => '${ email }', 'full_name' => '${ displayName }' ); ` +
 			'bits_e2e_mock_save_state( $state );'
 	);
+}
+
+/**
+ * Clicks the current view's "Sync" button and waits for the expected
+ * result, retrying the click a few times if it isn't there yet.
+ *
+ * WordPress's own WP-Cron can independently trigger Action Scheduler's
+ * queue runner on any page load (no DISABLE_WP_CRON is set for this
+ * dev/e2e environment, matching production) - if that fires and claims
+ * a just-queued job in the brief window between this test queuing it
+ * and clicking Sync, our own explicit process_due_jobs() call
+ * legitimately finds nothing due ("No queued actions were due.") even
+ * though the job already ran (or is about to, via that separate
+ * request). This is a real, if rare, race in the plugin's own
+ * cron-plus-manual-Sync design, confirmed via a CI failure - not a
+ * mock or application bug to work around by disabling cron, since a
+ * real admin clicking Sync would hit the exact same race and would
+ * just click it again. This helper does the same.
+ *
+ * @param page   Current page, already on a view with a "Sync" button.
+ * @param verify Assertion that should hold once the expected state has
+ *               actually landed - retried (via a fresh Sync click) if
+ *               it doesn't hold yet.
+ * @return void
+ */
+async function syncUntil( page: Page, verify: () => Promise<void> ): Promise<void> {
+	const attempts = 3;
+
+	for ( let attempt = 1; attempt <= attempts; attempt++ ) {
+		await page.getByRole( 'button', { name: 'Sync' } ).click();
+		await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
+
+		try {
+			await verify();
+			return;
+		} catch ( error ) {
+			if ( attempt === attempts ) {
+				throw error;
+			}
+		}
+	}
 }
 
 function deleteMemberRows( email: string ): void {
@@ -162,8 +203,9 @@ test( 'full member lifecycle: create a subgroup, add/remove a member, remove/re-
 
 			// Forces the queued add job to actually execute (a real
 			// directadd call, per the E2E mock) before verifying it below.
-			await page.getByRole( 'button', { name: 'Sync' } ).click();
-			await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
+			await syncUntil( page, async () => {
+				await expect( page.getByRole( 'checkbox', { name: new RegExp( subgroupName ) } ) ).toBeVisible( { timeout: 3000 } );
+			} );
 		} );
 
 		await test.step( 'verify the member was added, at the member level', async () => {
@@ -194,10 +236,9 @@ test( 'full member lifecycle: create a subgroup, add/remove a member, remove/re-
 
 			await expect( page.getByText( '1 group removal(s) queued.' ) ).toBeVisible();
 
-			await page.getByRole( 'button', { name: 'Sync' } ).click();
-			await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
-
-			await expect( page.getByRole( 'checkbox', { name: new RegExp( subgroupName ) } ) ).toHaveCount( 0 );
+			await syncUntil( page, async () => {
+				await expect( page.getByRole( 'checkbox', { name: new RegExp( subgroupName ) } ) ).toHaveCount( 0 );
+			} );
 		} );
 
 		await test.step( 'remove the member from the parent group', async () => {
@@ -212,8 +253,9 @@ test( 'full member lifecycle: create a subgroup, add/remove a member, remove/re-
 
 			await expect( page.getByText( '1 group removal(s) queued.' ) ).toBeVisible();
 
-			await page.getByRole( 'button', { name: 'Sync' } ).click();
-			await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
+			await syncUntil( page, async () => {
+				await expect( page.getByText( 'No currently subscribed groups found.' ) ).toBeVisible( { timeout: 3000 } );
+			} );
 		} );
 
 		await test.step( 'verify the member is in no groups', async () => {
@@ -229,8 +271,9 @@ test( 'full member lifecycle: create a subgroup, add/remove a member, remove/re-
 
 			await expect( page.getByText( '1 group addition(s) queued.' ) ).toBeVisible();
 
-			await page.getByRole( 'button', { name: 'Sync' } ).click();
-			await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
+			await syncUntil( page, async () => {
+				await expect( page.getByRole( 'checkbox', { name: `Select ${ PARENT_SLUG } (${ PARENT_SLUG })`, exact: true } ) ).toBeVisible( { timeout: 3000 } );
+			} );
 		} );
 
 		await test.step( 'verify the member is only in the parent group', async () => {
