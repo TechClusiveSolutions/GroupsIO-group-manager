@@ -35,3 +35,35 @@ This document specifies the accessibility standard this project must meet, which
 * The magic link request form must clearly announce, to a screen reader, both the generic confirmation message after submission and any rate-limit-triggered state — without the rate-limit state ever revealing more specific information than the generic message would (the accessible experience must not become a side channel that leaks enumeration information, per the Security document's mitigation).
 * Admin alert emails (critical auth failure, mass-action anomaly) are plain, well-structured text/HTML email — not requiring any visual-only cue (e.g., color alone) to convey severity.
 * The pending-approval admin UI for mass-action jobs must make the review/approve/reject action for each held job unambiguous via accessible labels, not relying on visual grouping or table layout alone to convey which job a given action applies to.
+
+### 6. Keyboard Shortcuts (Access Keys)
+
+* Every actionable submit button and navigation link on the GroupsIO Management admin area's three pages (Feature Controls, Subgroup Management, User Assignment) carries an HTML accesskey attribute, activated as Alt+*letter* in Chrome (the primary contributor's browser) and exposed to screen readers as a standard accesskey announcement (JAWS, the primary contributor's screen reader, announces the assigned key when the control receives focus).
+* Per-row, per-item dynamic links (e.g., each subgroup's row link in the Subgroup Management list, each member's row link in the User Assignment list, the per-row Clear override link in User Assignment Details) are explicitly out of scope for accesskeys, since a distinct static key cannot sensibly be assigned per dynamically-generated row. These remain reachable via standard screen reader list/link navigation.
+* The letters D, E, and F are never used, since Chrome on Windows intercepts Alt+D (address bar focus) and Alt+E / Alt+F (Chrome's own menu) before the keypress reaches the page.
+* Each letter maps to exactly one action *type*, and that mapping never changes based on which page or view the control appears on — a control's accesskey is determined solely by what kind of action it performs, not by its surrounding context. Two controls with different accesskeys never appear on screen at the same time, so there is no risk of ambiguity.
+
+Global mapping:
+
+* S — Save Changes
+* T — Reset
+* C — Create / Create new subgroup
+* U — Update
+* D — Delete this subgroup
+* Y — Yes, delete / Yes, remove (confirmation actions)
+* L — Cancel
+* N — Sync
+* H — Search
+* R — Remove Selected
+* A — Add Selected / Add Groups (link)
+* B — Back (to list / to details)
+
+Per-page/view assignment:
+
+* Feature Controls: S (Save Changes), T (Reset)
+* Subgroup Management, List view: C (Create new subgroup), N (Sync)
+* Subgroup Management, Create view: B (Back to Subgroup Management), C (Create), N (Sync)
+* Subgroup Management, Details view: B (Back to Subgroup Management), U (Update), D (Delete this subgroup), N (Sync); while the inline delete confirmation is showing, D is replaced on screen by Y (Yes, delete this subgroup) and L (Cancel)
+* User Assignment, List view: H (Search), N (Sync)
+* User Assignment, Details view: B (Back to User Assignment), H (Search), R (Remove Selected), A (Add Groups link), N (Sync); while the inline parent-group-removal confirmation is showing, R is replaced on screen by Y (Yes, remove from the parent group) and L (Cancel)
+* User Assignment, Add Groups view: B (Back to Details), H (Search), A (Add Selected), N (Sync)

@@ -479,7 +479,7 @@ final class UserAssignmentPage {
 		if ( '' !== $member ) {
 			printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $member ) );
 		}
-		submit_button( __( 'Sync', 'bits-groupsio-sync' ), 'secondary', 'submit', false );
+		submit_button( AccessKeys::label( __( 'Sync', 'bits-groupsio-sync' ), 'N' ), 'secondary', 'submit', false, array( 'accesskey' => 'N' ) );
 		echo '</form>';
 	}
 
@@ -539,7 +539,7 @@ final class UserAssignmentPage {
 				value="<?php echo esc_attr( $search ); ?>"
 				autofocus
 			/>
-			<button type="submit" class="button"><?php esc_html_e( 'Search', 'bits-groupsio-sync' ); ?></button>
+			<button type="submit" class="button" accesskey="H"><?php echo esc_html( AccessKeys::label( __( 'Search', 'bits-groupsio-sync' ), 'H' ) ); ?></button>
 		</form>
 		<?php
 	}
@@ -653,9 +653,9 @@ final class UserAssignmentPage {
 		echo '<h1>' . esc_html( self::details_heading( $email ) ) . '</h1>';
 
 		printf(
-			'<p><a href="%1$s">%2$s</a></p>',
+			'<p><a href="%1$s" accesskey="B">%2$s</a></p>',
 			esc_url( self::list_url() ),
-			esc_html__( 'Back to User Assignment', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Back to User Assignment', 'bits-groupsio-sync' ), 'B' ) )
 		);
 
 		self::render_sync_button( self::VIEW_DETAILS, $email );
@@ -711,9 +711,9 @@ final class UserAssignmentPage {
 	 */
 	private static function render_add_groups_link( string $email ): void {
 		printf(
-			'<p><a href="%1$s">%2$s</a></p>',
+			'<p><a href="%1$s" accesskey="A">%2$s</a></p>',
 			esc_url( self::add_groups_url( $email ) ),
-			esc_html__( 'Add groups', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Add groups', 'bits-groupsio-sync' ), 'A' ) )
 		);
 	}
 
@@ -762,7 +762,7 @@ final class UserAssignmentPage {
 				value="<?php echo esc_attr( $search ); ?>"
 				<?php echo $autofocus ? 'autofocus' : ''; ?>
 			/>
-			<button type="submit" class="button"><?php esc_html_e( 'Search', 'bits-groupsio-sync' ); ?></button>
+			<button type="submit" class="button" accesskey="H"><?php echo esc_html( AccessKeys::label( __( 'Search', 'bits-groupsio-sync' ), 'H' ) ); ?></button>
 		</form>
 		<?php
 	}
@@ -806,7 +806,7 @@ final class UserAssignmentPage {
 
 		echo '</tbody></table>';
 
-		submit_button( __( 'Remove Selected', 'bits-groupsio-sync' ) );
+		submit_button( AccessKeys::label( __( 'Remove Selected', 'bits-groupsio-sync' ), 'R' ), 'primary', 'submit', true, array( 'accesskey' => 'R' ) );
 		echo '</form>';
 
 		if ( 0 !== $confirm_parent_id ) {
@@ -982,12 +982,21 @@ final class UserAssignmentPage {
 		echo '<input type="hidden" name="bits_groupsio_action" value="confirm_parent_remove" />';
 		printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $email ) );
 		printf( '<input type="hidden" name="subgroup_id" value="%s" />', esc_attr( (string) $parent_id ) );
-		submit_button( __( 'Yes, remove from the parent group', 'bits-groupsio-sync' ), 'primary delete', 'submit', false, array( 'autofocus' => 'autofocus' ) );
+		submit_button(
+			AccessKeys::label( __( 'Yes, remove from the parent group', 'bits-groupsio-sync' ), 'Y' ),
+			'primary delete',
+			'submit',
+			false,
+			array(
+				'autofocus' => 'autofocus',
+				'accesskey' => 'Y',
+			)
+		);
 		echo ' ';
 		printf(
-			'<a class="button" href="%s">%s</a>',
+			'<a class="button" href="%s" accesskey="L">%s</a>',
 			esc_url( self::details_url( $email ) ),
-			esc_html__( 'Cancel', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Cancel', 'bits-groupsio-sync' ), 'L' ) )
 		);
 		echo '</form></div>';
 	}
@@ -1069,9 +1078,9 @@ final class UserAssignmentPage {
 		echo '<h1>' . esc_html( self::add_groups_heading( $email ) ) . '</h1>';
 
 		printf(
-			'<p><a href="%1$s">%2$s</a></p>',
+			'<p><a href="%1$s" accesskey="B">%2$s</a></p>',
 			esc_url( self::details_url( $email ) ),
-			esc_html__( 'Back to Details', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Back to Details', 'bits-groupsio-sync' ), 'B' ) )
 		);
 
 		self::render_sync_button( self::VIEW_ADD_GROUPS, $email );
@@ -1148,7 +1157,7 @@ final class UserAssignmentPage {
 				value="<?php echo esc_attr( $search ); ?>"
 				autofocus
 			/>
-			<button type="submit" class="button"><?php esc_html_e( 'Search', 'bits-groupsio-sync' ); ?></button>
+			<button type="submit" class="button" accesskey="H"><?php echo esc_html( AccessKeys::label( __( 'Search', 'bits-groupsio-sync' ), 'H' ) ); ?></button>
 		</form>
 		<?php
 	}
@@ -1209,7 +1218,7 @@ final class UserAssignmentPage {
 
 		echo '</tbody></table>';
 
-		submit_button( __( 'Add Selected', 'bits-groupsio-sync' ) );
+		submit_button( AccessKeys::label( __( 'Add Selected', 'bits-groupsio-sync' ), 'A' ), 'primary', 'submit', true, array( 'accesskey' => 'A' ) );
 		echo '</form>';
 	}
 

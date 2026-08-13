@@ -564,9 +564,9 @@ final class SubgroupManagementPage {
 		}
 
 		printf(
-			'<p><a href="%1$s">%2$s</a></p>',
+			'<p><a href="%1$s" accesskey="C">%2$s</a></p>',
 			esc_url( self::create_url() ),
-			esc_html__( 'Create new subgroup', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Create new subgroup', 'bits-groupsio-sync' ), 'C' ) )
 		);
 
 		if ( null === $rows || empty( $rows ) ) {
@@ -614,9 +614,9 @@ final class SubgroupManagementPage {
 		self::render_notice();
 
 		printf(
-			'<p><a href="%1$s">%2$s</a></p>',
+			'<p><a href="%1$s" accesskey="B">%2$s</a></p>',
 			esc_url( self::list_url() ),
-			esc_html__( 'Back to Subgroup Management', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Back to Subgroup Management', 'bits-groupsio-sync' ), 'B' ) )
 		);
 
 		echo '<form method="post">';
@@ -625,7 +625,7 @@ final class SubgroupManagementPage {
 
 		self::render_name_title_desc_fields( '', '', '', true );
 
-		submit_button( __( 'Create', 'bits-groupsio-sync' ) );
+		submit_button( AccessKeys::label( __( 'Create', 'bits-groupsio-sync' ), 'C' ), 'primary', 'submit', true, array( 'accesskey' => 'C' ) );
 		echo '</form>';
 	}
 
@@ -652,9 +652,9 @@ final class SubgroupManagementPage {
 		self::render_notice();
 
 		printf(
-			'<p><a href="%1$s">%2$s</a></p>',
+			'<p><a href="%1$s" accesskey="B">%2$s</a></p>',
 			esc_url( self::list_url() ),
-			esc_html__( 'Back to Subgroup Management', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Back to Subgroup Management', 'bits-groupsio-sync' ), 'B' ) )
 		);
 
 		$subgroup      = null;
@@ -708,7 +708,7 @@ final class SubgroupManagementPage {
 			! $confirming
 		);
 
-		submit_button( __( 'Update', 'bits-groupsio-sync' ) );
+		submit_button( AccessKeys::label( __( 'Update', 'bits-groupsio-sync' ), 'U' ), 'primary', 'submit', true, array( 'accesskey' => 'U' ) );
 		echo '</form>';
 
 		self::render_delete_section( $subgroup_id, $slug, $confirming );
@@ -740,9 +740,9 @@ final class SubgroupManagementPage {
 	private static function render_delete_section( int $subgroup_id, string $slug, bool $confirming ): void {
 		if ( ! $confirming ) {
 			printf(
-				'<p><a class="button" href="%s">%s</a></p>',
+				'<p><a class="button" href="%s" accesskey="D">%s</a></p>',
 				esc_url( add_query_arg( 'confirm_delete', '1' ) ),
-				esc_html__( 'Delete this subgroup', 'bits-groupsio-sync' )
+				esc_html( AccessKeys::label( __( 'Delete this subgroup', 'bits-groupsio-sync' ), 'D' ) )
 			);
 			return;
 		}
@@ -755,12 +755,21 @@ final class SubgroupManagementPage {
 		echo '<input type="hidden" name="bits_groupsio_action" value="delete" />';
 		printf( '<input type="hidden" name="subgroup_id" value="%s" />', esc_attr( (string) $subgroup_id ) );
 		printf( '<input type="hidden" name="current_slug" value="%s" />', esc_attr( $slug ) );
-		submit_button( __( 'Yes, delete this subgroup', 'bits-groupsio-sync' ), 'primary delete', 'submit', false, array( 'autofocus' => 'autofocus' ) );
+		submit_button(
+			AccessKeys::label( __( 'Yes, delete this subgroup', 'bits-groupsio-sync' ), 'Y' ),
+			'primary delete',
+			'submit',
+			false,
+			array(
+				'autofocus' => 'autofocus',
+				'accesskey' => 'Y',
+			)
+		);
 		echo ' ';
 		printf(
-			'<a class="button" href="%s">%s</a>',
+			'<a class="button" href="%s" accesskey="L">%s</a>',
 			esc_url( remove_query_arg( 'confirm_delete' ) ),
-			esc_html__( 'Cancel', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Cancel', 'bits-groupsio-sync' ), 'L' ) )
 		);
 		echo '</form></div>';
 	}
@@ -881,7 +890,7 @@ final class SubgroupManagementPage {
 		if ( 0 !== $subgroup_id ) {
 			printf( '<input type="hidden" name="subgroup_id" value="%s" />', esc_attr( (string) $subgroup_id ) );
 		}
-		submit_button( __( 'Sync', 'bits-groupsio-sync' ), 'secondary', 'submit', false );
+		submit_button( AccessKeys::label( __( 'Sync', 'bits-groupsio-sync' ), 'N' ), 'secondary', 'submit', false, array( 'accesskey' => 'N' ) );
 		echo '</form>';
 	}
 

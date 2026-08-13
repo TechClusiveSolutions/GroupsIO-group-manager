@@ -11,6 +11,8 @@
 
 namespace BITS\GroupsIOSync;
 
+use BITS\GroupsIOSync\Admin\AccessKeys;
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
@@ -240,11 +242,11 @@ final class Settings {
 		echo '<div class="wrap"><h1>' . esc_html__( 'Feature Controls', 'bits-groupsio-sync' ) . '</h1><form action="options.php" method="post">';
 		settings_fields( 'bits_groupsio_sync' );
 		do_settings_sections( 'bits-groupsio-sync' );
-		submit_button( __( 'Save Changes', 'bits-groupsio-sync' ), 'primary', 'submit', false );
+		submit_button( AccessKeys::label( __( 'Save Changes', 'bits-groupsio-sync' ), 'S' ), 'primary', 'submit', false, array( 'accesskey' => 'S' ) );
 		echo ' ';
 		printf(
-			'<input type="reset" class="button" value="%s" />',
-			esc_attr__( 'Reset', 'bits-groupsio-sync' )
+			'<input type="reset" class="button" accesskey="T" value="%s" />',
+			esc_attr( AccessKeys::label( __( 'Reset', 'bits-groupsio-sync' ), 'T' ) )
 		);
 		echo ' ';
 		printf(

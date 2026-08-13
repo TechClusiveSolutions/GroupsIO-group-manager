@@ -22,7 +22,7 @@ test.describe( 'Subgroup Management edge cases', () => {
 
 	test( 'submitting Create with a blank name does not create anything', async ( { page } ) => {
 		await page.getByRole( 'link', { name: 'Create new subgroup' } ).click();
-		await page.getByRole( 'button', { name: 'Create', exact: true } ).click();
+		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
 
 		// HTML5 "required" blocks submission client-side; the page should
 		// simply still be the create form.
@@ -32,7 +32,7 @@ test.describe( 'Subgroup Management edge cases', () => {
 	test( 'creating a subgroup with a name that already exists surfaces a plain-language error', async ( { page } ) => {
 		await page.getByRole( 'link', { name: 'Create new subgroup' } ).click();
 		await page.getByLabel( 'Name', { exact: true } ).fill( 'fixture-subgroup' );
-		await page.getByRole( 'button', { name: 'Create', exact: true } ).click();
+		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
 
 		await expect( page.getByText( /Could not create the subgroup/ ) ).toBeVisible();
 		await expect( page.getByText( 'name already taken' ) ).toBeVisible();
@@ -75,7 +75,7 @@ test.describe( 'Subgroup Management edge cases', () => {
 		const secondName = `distinct-row-${ Date.now() }`;
 		await page.getByRole( 'link', { name: 'Create new subgroup' } ).click();
 		await page.getByLabel( 'Name', { exact: true } ).fill( secondName );
-		await page.getByRole( 'button', { name: 'Create', exact: true } ).click();
+		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
 		await expect( page.getByText( 'Subgroup created.' ) ).toBeVisible();
 
 		await expect( page.getByRole( 'link', { name: /fixture-subgroup@/ } ) ).toBeVisible();
