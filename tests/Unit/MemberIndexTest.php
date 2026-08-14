@@ -112,6 +112,50 @@ final class MemberIndexTest extends WP_UnitTestCase {
 		$this->assertNotNull( $row, 'wpdb last_error: ' . $wpdb->last_error );
 	}
 
+	public function test_ensure_table_recreates_a_missing_table(): void {
+		// Simulates the confirmed real-world failure (issue #108):
+		// register_activation_hook ran but the table never actually got
+		// created - ensure_table() (called from register(), i.e. every
+		// plugins_loaded) must self-heal it without needing another
+		// activation.
+		global $wpdb;
+		$wpdb->query( 'DROP TABLE IF EXISTS ' . MemberIndex::table_name() );
+
+		MemberIndex::ensure_table();
+
+		$wpdb->insert(
+			MemberIndex::table_name(),
+			array(
+				'email'         => 'ensure-table-check@example.test',
+				'subgroup_id'   => 999999,
+				'subgroup_slug' => 'perception-is-all+ensure-table-check',
+				'synced_at'     => current_time( 'mysql', true ),
+			)
+		);
+
+		$row = $this->fetch_row( 'ensure-table-check@example.test', 999999 );
+		$this->assertNotNull( $row, 'wpdb last_error: ' . $wpdb->last_error );
+	}
+
+	public function test_ensure_table_heals_when_schema_version_option_is_missing(): void {
+		// Covers the "never set" case from ensure_table()'s own docblock
+		// (e.g. an install predating this self-heal check, or the
+		// version option itself somehow not surviving a partial
+		// activation) - a missing/stale version option must always fall
+		// through to create_table(), which re-sets the option as one of
+		// its own side effects. Verified via the option's own value
+		// rather than a raw DROP TABLE/SHOW TABLES check, since DDL
+		// statements aren't reliably observable within WP core's
+		// transaction-wrapped PHPUnit fixture (confirmed while writing
+		// this test: a DROP TABLE that itself reported success was
+		// still visible via a subsequent SHOW TABLES in the same test).
+		delete_option( 'bits_groupsio_member_index_schema_version' );
+
+		MemberIndex::ensure_table();
+
+		$this->assertSame( '1', get_option( 'bits_groupsio_member_index_schema_version' ) );
+	}
+
 	public function test_sync_indexes_every_member_against_the_parent_group_too(): void {
 		$this->queue_responses( array(
 			$this->group_response( 900001, 'perception-is-all', 'Perception Is All' ),
