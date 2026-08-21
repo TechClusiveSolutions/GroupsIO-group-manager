@@ -37,7 +37,12 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class QueuedExecutionEngine {
 
-	private const HOOK = 'bits_groupsio_execute_queued_action';
+	/**
+	 * Also read by ActionSchedulerClient::schedule() - not private, since
+	 * that class is the one place besides register()/execute() below that
+	 * needs to know which hook a scheduled action id belongs to.
+	 */
+	public const HOOK = 'bits_groupsio_execute_queued_action';
 
 	private const MAX_ATTEMPTS = 3;
 
@@ -71,7 +76,13 @@ final class QueuedExecutionEngine {
 	 * @param string $subgroup_slug  Full slug of the group/subgroup to add to.
 	 * @param string $subgroup_title Cosmetic title, if any.
 	 * @param int    $admin_user_id  WP user id of the admin queuing the action.
-	 * @return void
+	 * @return int The scheduled action's id (0 if scheduling failed). The
+	 *             auto-queued parent-add's own id (see
+	 *             maybe_queue_parent_add() below) is never returned here -
+	 *             only the id of the action the caller directly requested,
+	 *             per the existing "does not change the visible
+	 *             queued-count" precedent already established for that
+	 *             auto-add.
 	 */
 	public static function queue_add(
 		int $user_id,
@@ -81,8 +92,8 @@ final class QueuedExecutionEngine {
 		string $subgroup_slug,
 		string $subgroup_title,
 		int $admin_user_id
-	): void {
-		self::schedule(
+	): int {
+		$action_id = ActionSchedulerClient::schedule(
 			array(
 				'job_action'     => 'add',
 				'user_id'        => $user_id,
@@ -98,6 +109,8 @@ final class QueuedExecutionEngine {
 		);
 
 		self::maybe_queue_parent_add( $user_id, $email, $display_name, $subgroup_slug, $admin_user_id );
+
+		return $action_id;
 	}
 
 	/**
@@ -163,10 +176,10 @@ final class QueuedExecutionEngine {
 	 * @param string $email         Member's email address.
 	 * @param int    $subgroup_id   Numeric Groups.io group/subgroup id to remove from.
 	 * @param int    $admin_user_id WP user id of the admin queuing the action.
-	 * @return void
+	 * @return int The scheduled action's id (0 if scheduling failed).
 	 */
-	public static function queue_remove( string $email, int $subgroup_id, int $admin_user_id ): void {
-		self::schedule(
+	public static function queue_remove( string $email, int $subgroup_id, int $admin_user_id ): int {
+		return ActionSchedulerClient::schedule(
 			array(
 				'job_action'    => 'remove',
 				'email'         => $email,
@@ -176,21 +189,6 @@ final class QueuedExecutionEngine {
 			),
 			time()
 		);
-	}
-
-	/**
-	 * Schedules one job as an Action Scheduler single action.
-	 *
-	 * @param array<string, mixed> $job       Job data - see queue_add()/queue_remove().
-	 * @param int                  $timestamp Unix timestamp to run the job at - time() to run as close to immediately as Action Scheduler's own runner cadence allows, or a later time for a retry's backoff delay.
-	 * @return void
-	 */
-	private static function schedule( array $job, int $timestamp ): void {
-		if ( ! function_exists( 'as_schedule_single_action' ) ) {
-			return;
-		}
-
-		as_schedule_single_action( $timestamp, self::HOOK, array( $job ), '', false );
 	}
 
 	/**
@@ -215,7 +213,7 @@ final class QueuedExecutionEngine {
 		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
 			if ( $attempt < self::MAX_ATTEMPTS ) {
 				$job['attempt'] = $attempt + 1;
-				self::schedule( $job, time() + self::RETRY_DELAY_SECONDS );
+				ActionSchedulerClient::schedule( $job, time() + self::RETRY_DELAY_SECONDS );
 				return;
 			}
 
