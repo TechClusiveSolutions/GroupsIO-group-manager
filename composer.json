@@ -29,6 +29,7 @@
     },
     "scripts": {
         "test": "phpunit",
+        "test-coverage": "XDEBUG_MODE=coverage phpunit --coverage-text --coverage-clover=coverage.xml",
         "lint": "phpcs",
         "analyse": "phpstan analyse"
     },
