@@ -115,6 +115,24 @@ final class QueuedExecutionEngineTest extends WP_UnitTestCase {
 		$this->assertNotFalse( as_next_scheduled_action( self::HOOK ) );
 	}
 
+	/**
+	 * Per #112: queue_add()/queue_remove() now return the scheduled
+	 * action's own id (sourced from ActionSchedulerClient::schedule())
+	 * instead of void, so UserAssignmentPage can track it through the
+	 * post-submit redirect.
+	 */
+	public function test_queue_add_returns_the_scheduled_actions_id(): void {
+		$action_id = QueuedExecutionEngine::queue_add( 1, 'queued-add-id@example.test', 'Name', 900002, 'perception-is-all+list', 'List', 9 );
+
+		$this->assertGreaterThan( 0, $action_id );
+	}
+
+	public function test_queue_remove_returns_the_scheduled_actions_id(): void {
+		$action_id = QueuedExecutionEngine::queue_remove( 'queued-remove-id@example.test', 900003, 9 );
+
+		$this->assertGreaterThan( 0, $action_id );
+	}
+
 	public function test_execute_add_success_updates_index_records_audit_and_notification(): void {
 		$this->mock_response( $this->json_response( 200, array( 'object' => 'ok' ) ) );
 

@@ -12,6 +12,7 @@
 
 # PHPUnit / coverage
 /coverage/
+/coverage.xml
 .phpunit.result.cache
 
 # Node (tooling only, no runtime JS dependency for this plugin)

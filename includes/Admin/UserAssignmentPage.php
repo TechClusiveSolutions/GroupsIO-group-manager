@@ -7,6 +7,7 @@
 
 namespace BITS\GroupsIOSync\Admin;
 
+use BITS\GroupsIOSync\ActionSchedulerClient;
 use BITS\GroupsIOSync\MemberIndex;
 use BITS\GroupsIOSync\QueuedExecutionEngine;
 
@@ -62,6 +63,15 @@ final class UserAssignmentPage {
 	private const NONCE_ACTION_SYNC                  = 'bits_groupsio_sync';
 
 	/**
+	 * Query arg carrying the comma-separated Action Scheduler action ids
+	 * a prior Add Selected/Remove Selected submission queued, round-tripped
+	 * through the redirect and back through the Sync form so process_sync()
+	 * can check whether they've actually finished. See #112 and
+	 * subgroup-crud-and-admin-pages-design.md section 8.
+	 */
+	private const QUERY_ARG_PENDING_ACTIONS = 'bits_pending_actions';
+
+	/**
 	 * Returns this page's fixed notice vocabulary as {code: [type,
 	 * translated template]}.
 	 *
@@ -77,6 +87,7 @@ final class UserAssignmentPage {
 			/* translators: %s: number of queued actions processed. */
 			'jobs_processed'        => array( 'success', __( '%s queued action(s) processed.', 'bits-groupsio-sync' ) ),
 			'no_jobs_due'           => array( 'success', __( 'No queued actions were due.', 'bits-groupsio-sync' ) ),
+			'still_processing'      => array( 'warning', __( 'Still processing - click Sync again in a moment.', 'bits-groupsio-sync' ) ),
 			'invalid_request'       => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
 			'owner_removal_blocked' => array( 'error', __( "The group owner can't be removed from the parent group.", 'bits-groupsio-sync' ) ),
 		);
@@ -129,6 +140,9 @@ final class UserAssignmentPage {
 				if ( 0 !== $result['parent_id'] ) {
 					$args['confirm_remove_parent'] = $result['parent_id'];
 				}
+				if ( ! empty( $result['action_ids'] ) ) {
+					$args[ self::QUERY_ARG_PENDING_ACTIONS ] = implode( ',', $result['action_ids'] );
+				}
 				wp_safe_redirect( add_query_arg( $args, self::details_url( $result['email'] ) ) );
 				exit;
 			}
@@ -154,7 +168,8 @@ final class UserAssignmentPage {
 				self::redirect_with_notice(
 					$result['email'],
 					$result['invalid'] ? 'invalid_request' : 'added_queued',
-					$result['invalid'] ? '' : (string) $result['queued_count']
+					$result['invalid'] ? '' : (string) $result['queued_count'],
+					$result['action_ids']
 				);
 				return;
 			}
@@ -198,7 +213,7 @@ final class UserAssignmentPage {
 	 * maybe_handle_post() purely so this branch is unit testable without
 	 * terminating the test process.
 	 *
-	 * @return array{queued_count: int, parent_id: int, owner_blocked: bool, email: string, invalid: bool}
+	 * @return array{queued_count: int, action_ids: int[], parent_id: int, owner_blocked: bool, email: string, invalid: bool}
 	 */
 	public static function process_remove_selected(): array {
 		check_admin_referer( self::NONCE_ACTION_REMOVE_SELECTED );
@@ -211,6 +226,7 @@ final class UserAssignmentPage {
 		if ( '' === $email || empty( $checked ) ) {
 			return array(
 				'queued_count'  => 0,
+				'action_ids'    => array(),
 				'parent_id'     => 0,
 				'owner_blocked' => false,
 				'email'         => $email,
@@ -222,6 +238,7 @@ final class UserAssignmentPage {
 		$groups        = MemberIndex::get_member_groups( $email, 1, self::MAX_MEMBER_GROUPS );
 		$admin_user_id = get_current_user_id();
 		$queued_count  = 0;
+		$action_ids    = array();
 		$parent_id     = 0;
 		$owner_blocked = false;
 
@@ -239,12 +256,16 @@ final class UserAssignmentPage {
 				continue;
 			}
 
-			QueuedExecutionEngine::queue_remove( $email, $group['subgroup_id'], $admin_user_id );
+			$action_id = QueuedExecutionEngine::queue_remove( $email, $group['subgroup_id'], $admin_user_id );
+			if ( 0 !== $action_id ) {
+				$action_ids[] = $action_id;
+			}
 			++$queued_count;
 		}
 
 		return array(
 			'queued_count'  => $queued_count,
+			'action_ids'    => $action_ids,
 			'parent_id'     => $parent_id,
 			'owner_blocked' => $owner_blocked,
 			'email'         => $email,
@@ -330,7 +351,7 @@ final class UserAssignmentPage {
 	 * own addable set (never trusting client-submitted ids blindly), and
 	 * queues an immediate add job for every checked group.
 	 *
-	 * @return array{queued_count: int, email: string, invalid: bool}
+	 * @return array{queued_count: int, action_ids: int[], email: string, invalid: bool}
 	 */
 	public static function process_add_selected(): array {
 		check_admin_referer( self::NONCE_ACTION_ADD_SELECTED );
@@ -343,6 +364,7 @@ final class UserAssignmentPage {
 		if ( '' === $email || empty( $checked ) ) {
 			return array(
 				'queued_count' => 0,
+				'action_ids'   => array(),
 				'email'        => $email,
 				'invalid'      => true,
 			);
@@ -354,13 +376,14 @@ final class UserAssignmentPage {
 		$display_name  = MemberIndex::get_display_name( $email );
 		$admin_user_id = get_current_user_id();
 		$queued_count  = 0;
+		$action_ids    = array();
 
 		foreach ( $addable as $group ) {
 			if ( ! in_array( $group['subgroup_id'], $checked, true ) ) {
 				continue;
 			}
 
-			QueuedExecutionEngine::queue_add(
+			$action_id = QueuedExecutionEngine::queue_add(
 				$user_id,
 				$email,
 				$display_name,
@@ -369,11 +392,15 @@ final class UserAssignmentPage {
 				$group['subgroup_title'],
 				$admin_user_id
 			);
+			if ( 0 !== $action_id ) {
+				$action_ids[] = $action_id;
+			}
 			++$queued_count;
 		}
 
 		return array(
 			'queued_count' => $queued_count,
+			'action_ids'   => $action_ids,
 			'email'        => $email,
 			'invalid'      => 0 === $queued_count,
 		);
@@ -388,7 +415,20 @@ final class UserAssignmentPage {
 	 * redirect purely so the admin lands back on the view they were on,
 	 * not because the sync itself is scoped by them.
 	 *
-	 * @return array{count: int, view: string, member: string}
+	 * Per #112: also reads any self::QUERY_ARG_PENDING_ACTIONS ids the
+	 * Sync form round-tripped from the view that submitted it (see
+	 * render_sync_button()), and after process_due_jobs() checks each
+	 * one's status via ActionSchedulerClient::is_finished(). This exists
+	 * because Action Scheduler's own WP-Cron/async triggers can claim
+	 * and run a just-queued job before this click's own
+	 * process_due_jobs() call sees it - in that case process_due_jobs()
+	 * correctly finds nothing left to claim, but the job the admin is
+	 * actually waiting on may still be running via that other, invisible
+	 * request. Still-unfinished ids are returned so redirect_after_sync()
+	 * can keep tracking them instead of reporting a misleadingly-final
+	 * "no queued actions were due."
+	 *
+	 * @return array{count: int, view: string, member: string, still_processing: bool, remaining_action_ids: int[]}
 	 */
 	public static function process_sync(): array {
 		check_admin_referer( self::NONCE_ACTION_SYNC );
@@ -396,10 +436,29 @@ final class UserAssignmentPage {
 		$view   = isset( $_POST['sync_view'] ) ? sanitize_key( wp_unslash( $_POST['sync_view'] ) ) : '';
 		$member = isset( $_POST['member'] ) ? sanitize_email( wp_unslash( $_POST['member'] ) ) : '';
 
+		$tracked_ids = array();
+		if ( isset( $_POST[ self::QUERY_ARG_PENDING_ACTIONS ] ) ) {
+			$raw         = sanitize_text_field( wp_unslash( $_POST[ self::QUERY_ARG_PENDING_ACTIONS ] ) );
+			$tracked_ids = array_filter( array_map( 'absint', explode( ',', $raw ) ) );
+		}
+
+		$count = QueuedExecutionEngine::process_due_jobs();
+
+		$remaining_action_ids = array_values(
+			array_filter(
+				$tracked_ids,
+				static function ( int $action_id ): bool {
+					return ! ActionSchedulerClient::is_finished( $action_id );
+				}
+			)
+		);
+
 		return array(
-			'count'  => QueuedExecutionEngine::process_due_jobs(),
-			'view'   => $view,
-			'member' => $member,
+			'count'                => $count,
+			'view'                 => $view,
+			'member'               => $member,
+			'still_processing'     => ! empty( $remaining_action_ids ),
+			'remaining_action_ids' => $remaining_action_ids,
 		);
 	}
 
@@ -481,12 +540,18 @@ final class UserAssignmentPage {
 	 * @return void
 	 */
 	private static function render_sync_button( string $view, string $member = '' ): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only round-trip of ids from this page's own prior redirect into a hidden field; process_sync() re-verifies its own nonce before acting on anything.
+		$pending_actions = isset( $_GET[ self::QUERY_ARG_PENDING_ACTIONS ] ) ? sanitize_text_field( wp_unslash( $_GET[ self::QUERY_ARG_PENDING_ACTIONS ] ) ) : '';
+
 		echo '<form method="post">';
 		wp_nonce_field( self::NONCE_ACTION_SYNC );
 		echo '<input type="hidden" name="bits_groupsio_action" value="sync" />';
 		printf( '<input type="hidden" name="sync_view" value="%s" />', esc_attr( $view ) );
 		if ( '' !== $member ) {
 			printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $member ) );
+		}
+		if ( '' !== $pending_actions ) {
+			printf( '<input type="hidden" name="%1$s" value="%2$s" />', esc_attr( self::QUERY_ARG_PENDING_ACTIONS ), esc_attr( $pending_actions ) );
 		}
 		submit_button( AccessKeys::label( __( 'Sync', 'bits-groupsio-sync' ), 'N' ), 'secondary', 'submit', false, array( 'accesskey' => 'N' ) );
 		echo '</form>';
@@ -1317,9 +1382,11 @@ final class UserAssignmentPage {
 			$message = sprintf( $template, $detail );
 		}
 
+		$known_types = array( 'success', 'warning', 'error' );
+
 		printf(
 			'<div class="notice notice-%1$s"><p>%2$s</p></div>',
-			esc_attr( 'success' === $type ? 'success' : 'error' ),
+			esc_attr( in_array( $type, $known_types, true ) ? $type : 'error' ),
 			esc_html( $message )
 		);
 	}
@@ -1328,17 +1395,22 @@ final class UserAssignmentPage {
 	 * Redirects to the Details view for one member with a fixed-vocabulary
 	 * notice code and exits.
 	 *
-	 * @param string $email  Member's email address.
-	 * @param string $code   One of the keys in self::notices().
-	 * @param string $detail Optional detail to interpolate into the notice template.
+	 * @param string $email       Member's email address.
+	 * @param string $code        One of the keys in self::notices().
+	 * @param string $detail      Optional detail to interpolate into the notice template.
+	 * @param int[]  $action_ids  Action Scheduler ids to carry forward as self::QUERY_ARG_PENDING_ACTIONS, if any.
 	 * @return void
 	 * @codeCoverageIgnore Calls exit; cannot run inside the test process. Its pure input-building logic is trivial (array literal + add_query_arg).
 	 */
-	private static function redirect_with_notice( string $email, string $code, string $detail = '' ): void {
+	private static function redirect_with_notice( string $email, string $code, string $detail = '', array $action_ids = array() ): void {
 		$args = array( 'bits_notice' => $code );
 
 		if ( '' !== $detail ) {
 			$args['bits_notice_detail'] = $detail;
+		}
+
+		if ( ! empty( $action_ids ) ) {
+			$args[ self::QUERY_ARG_PENDING_ACTIONS ] = implode( ',', $action_ids );
 		}
 
 		wp_safe_redirect( add_query_arg( $args, self::details_url( $email ) ) );
@@ -1348,9 +1420,17 @@ final class UserAssignmentPage {
 	/**
 	 * Redirects back to whichever view the "Sync" button was submitted
 	 * from (List, Details, or Add Groups), with a notice reporting how
-	 * many queued actions were processed.
+	 * many queued actions were processed - or, per #112, that one or
+	 * more of the ids the admin is specifically waiting on are still
+	 * processing (claimed and running via Action Scheduler's own
+	 * independent trigger, not yet reflected in this click's own
+	 * process_due_jobs() call). In that case the still-unfinished ids
+	 * are carried forward as self::QUERY_ARG_PENDING_ACTIONS so the next
+	 * "Sync" click keeps tracking them, rather than reporting the old
+	 * binary "no queued actions were due" that could read as "nothing
+	 * happened" when the job is actually mid-flight.
 	 *
-	 * @param array{count: int, view: string, member: string} $result process_sync()'s return value.
+	 * @param array{count: int, view: string, member: string, still_processing: bool, remaining_action_ids: int[]} $result process_sync()'s return value.
 	 * @return void
 	 * @codeCoverageIgnore Calls exit; cannot run inside the test process. Its pure input-building logic is trivial (array literal + add_query_arg).
 	 */
@@ -1362,9 +1442,16 @@ final class UserAssignmentPage {
 			$target = self::add_groups_url( $result['member'] );
 		}
 
-		$args = array( 'bits_notice' => $result['count'] > 0 ? 'jobs_processed' : 'no_jobs_due' );
-		if ( $result['count'] > 0 ) {
-			$args['bits_notice_detail'] = (string) $result['count'];
+		if ( $result['still_processing'] ) {
+			$args = array(
+				'bits_notice'                   => 'still_processing',
+				self::QUERY_ARG_PENDING_ACTIONS => implode( ',', $result['remaining_action_ids'] ),
+			);
+		} else {
+			$args = array( 'bits_notice' => $result['count'] > 0 ? 'jobs_processed' : 'no_jobs_due' );
+			if ( $result['count'] > 0 ) {
+				$args['bits_notice_detail'] = (string) $result['count'];
+			}
 		}
 
 		wp_safe_redirect( add_query_arg( $args, $target ) );
