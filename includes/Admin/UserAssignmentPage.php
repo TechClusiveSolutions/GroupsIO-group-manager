@@ -7,6 +7,7 @@
 
 namespace BITS\GroupsIOSync\Admin;
 
+use BITS\GroupsIOSync\ActionSchedulerClient;
 use BITS\GroupsIOSync\MemberIndex;
 use BITS\GroupsIOSync\QueuedExecutionEngine;
 
@@ -62,6 +63,15 @@ final class UserAssignmentPage {
 	private const NONCE_ACTION_SYNC                  = 'bits_groupsio_sync';
 
 	/**
+	 * Query arg carrying the comma-separated Action Scheduler action ids
+	 * a prior Add Selected/Remove Selected submission queued, round-tripped
+	 * through the redirect and back through the Sync form so process_sync()
+	 * can check whether they've actually finished. See #112 and
+	 * subgroup-crud-and-admin-pages-design.md section 8.
+	 */
+	private const QUERY_ARG_PENDING_ACTIONS = 'bits_pending_actions';
+
+	/**
 	 * Returns this page's fixed notice vocabulary as {code: [type,
 	 * translated template]}.
 	 *
@@ -77,6 +87,7 @@ final class UserAssignmentPage {
 			/* translators: %s: number of queued actions processed. */
 			'jobs_processed'        => array( 'success', __( '%s queued action(s) processed.', 'bits-groupsio-sync' ) ),
 			'no_jobs_due'           => array( 'success', __( 'No queued actions were due.', 'bits-groupsio-sync' ) ),
+			'still_processing'      => array( 'warning', __( 'Still processing - click Sync again in a moment.', 'bits-groupsio-sync' ) ),
 			'invalid_request'       => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
 			'owner_removal_blocked' => array( 'error', __( "The group owner can't be removed from the parent group.", 'bits-groupsio-sync' ) ),
 		);
@@ -129,6 +140,9 @@ final class UserAssignmentPage {
 				if ( 0 !== $result['parent_id'] ) {
 					$args['confirm_remove_parent'] = $result['parent_id'];
 				}
+				if ( ! empty( $result['action_ids'] ) ) {
+					$args[ self::QUERY_ARG_PENDING_ACTIONS ] = implode( ',', $result['action_ids'] );
+				}
 				wp_safe_redirect( add_query_arg( $args, self::details_url( $result['email'] ) ) );
 				exit;
 			}
@@ -154,7 +168,8 @@ final class UserAssignmentPage {
 				self::redirect_with_notice(
 					$result['email'],
 					$result['invalid'] ? 'invalid_request' : 'added_queued',
-					$result['invalid'] ? '' : (string) $result['queued_count']
+					$result['invalid'] ? '' : (string) $result['queued_count'],
+					$result['action_ids']
 				);
 				return;
 			}
@@ -198,7 +213,7 @@ final class UserAssignmentPage {
 	 * maybe_handle_post() purely so this branch is unit testable without
 	 * terminating the test process.
 	 *
-	 * @return array{queued_count: int, parent_id: int, owner_blocked: bool, email: string, invalid: bool}
+	 * @return array{queued_count: int, action_ids: int[], parent_id: int, owner_blocked: bool, email: string, invalid: bool}
 	 */
 	public static function process_remove_selected(): array {
 		check_admin_referer( self::NONCE_ACTION_REMOVE_SELECTED );
@@ -211,6 +226,7 @@ final class UserAssignmentPage {
 		if ( '' === $email || empty( $checked ) ) {
 			return array(
 				'queued_count'  => 0,
+				'action_ids'    => array(),
 				'parent_id'     => 0,
 				'owner_blocked' => false,
 				'email'         => $email,
@@ -222,6 +238,7 @@ final class UserAssignmentPage {
 		$groups        = MemberIndex::get_member_groups( $email, 1, self::MAX_MEMBER_GROUPS );
 		$admin_user_id = get_current_user_id();
 		$queued_count  = 0;
+		$action_ids    = array();
 		$parent_id     = 0;
 		$owner_blocked = false;
 
@@ -239,12 +256,16 @@ final class UserAssignmentPage {
 				continue;
 			}
 
-			QueuedExecutionEngine::queue_remove( $email, $group['subgroup_id'], $admin_user_id );
+			$action_id = QueuedExecutionEngine::queue_remove( $email, $group['subgroup_id'], $admin_user_id );
+			if ( 0 !== $action_id ) {
+				$action_ids[] = $action_id;
+			}
 			++$queued_count;
 		}
 
 		return array(
 			'queued_count'  => $queued_count,
+			'action_ids'    => $action_ids,
 			'parent_id'     => $parent_id,
 			'owner_blocked' => $owner_blocked,
 			'email'         => $email,
@@ -257,11 +278,17 @@ final class UserAssignmentPage {
 	 * verifies the nonce, then re-validates the submitted subgroup id is
 	 * both one of this member's own indexed rows and actually the
 	 * parent group (never trusting a client-submitted id blindly)
-	 * before queuing the remove job. Independently re-checks
+	 * before queuing anything. Independently re-checks
 	 * `MemberIndex::is_owner_of_parent()` here too, rather than trusting
 	 * process_remove_selected()'s earlier check alone - defense in
 	 * depth against the member's owner status changing between the two
-	 * requests (e.g. a re-sync completing in between).
+	 * requests (e.g. a re-sync completing in between). Per #104 and the
+	 * confirmation copy's own promise ("removes this member from all of
+	 * BITS' Groups.io presence, not just one list"), queues a remove for
+	 * every one of the member's currently-indexed groups (parent and all
+	 * subgroups), not just the parent row - `get_member_groups()` already
+	 * excludes any row carrying a `removed` override, so this list never
+	 * includes memberships an admin already deliberately removed.
 	 *
 	 * @return array{email: string, invalid: bool, owner_blocked: bool}
 	 */
@@ -306,7 +333,10 @@ final class UserAssignmentPage {
 			);
 		}
 
-		QueuedExecutionEngine::queue_remove( $email, $subgroup_id, get_current_user_id() );
+		$admin_user_id = get_current_user_id();
+		foreach ( $groups as $group ) {
+			QueuedExecutionEngine::queue_remove( $email, $group['subgroup_id'], $admin_user_id );
+		}
 
 		return array(
 			'email'         => $email,
@@ -321,7 +351,7 @@ final class UserAssignmentPage {
 	 * own addable set (never trusting client-submitted ids blindly), and
 	 * queues an immediate add job for every checked group.
 	 *
-	 * @return array{queued_count: int, email: string, invalid: bool}
+	 * @return array{queued_count: int, action_ids: int[], email: string, invalid: bool}
 	 */
 	public static function process_add_selected(): array {
 		check_admin_referer( self::NONCE_ACTION_ADD_SELECTED );
@@ -334,6 +364,7 @@ final class UserAssignmentPage {
 		if ( '' === $email || empty( $checked ) ) {
 			return array(
 				'queued_count' => 0,
+				'action_ids'   => array(),
 				'email'        => $email,
 				'invalid'      => true,
 			);
@@ -345,13 +376,14 @@ final class UserAssignmentPage {
 		$display_name  = MemberIndex::get_display_name( $email );
 		$admin_user_id = get_current_user_id();
 		$queued_count  = 0;
+		$action_ids    = array();
 
 		foreach ( $addable as $group ) {
 			if ( ! in_array( $group['subgroup_id'], $checked, true ) ) {
 				continue;
 			}
 
-			QueuedExecutionEngine::queue_add(
+			$action_id = QueuedExecutionEngine::queue_add(
 				$user_id,
 				$email,
 				$display_name,
@@ -360,11 +392,15 @@ final class UserAssignmentPage {
 				$group['subgroup_title'],
 				$admin_user_id
 			);
+			if ( 0 !== $action_id ) {
+				$action_ids[] = $action_id;
+			}
 			++$queued_count;
 		}
 
 		return array(
 			'queued_count' => $queued_count,
+			'action_ids'   => $action_ids,
 			'email'        => $email,
 			'invalid'      => 0 === $queued_count,
 		);
@@ -379,7 +415,20 @@ final class UserAssignmentPage {
 	 * redirect purely so the admin lands back on the view they were on,
 	 * not because the sync itself is scoped by them.
 	 *
-	 * @return array{count: int, view: string, member: string}
+	 * Per #112: also reads any self::QUERY_ARG_PENDING_ACTIONS ids the
+	 * Sync form round-tripped from the view that submitted it (see
+	 * render_sync_button()), and after process_due_jobs() checks each
+	 * one's status via ActionSchedulerClient::is_finished(). This exists
+	 * because Action Scheduler's own WP-Cron/async triggers can claim
+	 * and run a just-queued job before this click's own
+	 * process_due_jobs() call sees it - in that case process_due_jobs()
+	 * correctly finds nothing left to claim, but the job the admin is
+	 * actually waiting on may still be running via that other, invisible
+	 * request. Still-unfinished ids are returned so redirect_after_sync()
+	 * can keep tracking them instead of reporting a misleadingly-final
+	 * "no queued actions were due."
+	 *
+	 * @return array{count: int, view: string, member: string, still_processing: bool, remaining_action_ids: int[]}
 	 */
 	public static function process_sync(): array {
 		check_admin_referer( self::NONCE_ACTION_SYNC );
@@ -387,10 +436,29 @@ final class UserAssignmentPage {
 		$view   = isset( $_POST['sync_view'] ) ? sanitize_key( wp_unslash( $_POST['sync_view'] ) ) : '';
 		$member = isset( $_POST['member'] ) ? sanitize_email( wp_unslash( $_POST['member'] ) ) : '';
 
+		$tracked_ids = array();
+		if ( isset( $_POST[ self::QUERY_ARG_PENDING_ACTIONS ] ) ) {
+			$raw         = sanitize_text_field( wp_unslash( $_POST[ self::QUERY_ARG_PENDING_ACTIONS ] ) );
+			$tracked_ids = array_filter( array_map( 'absint', explode( ',', $raw ) ) );
+		}
+
+		$count = QueuedExecutionEngine::process_due_jobs();
+
+		$remaining_action_ids = array_values(
+			array_filter(
+				$tracked_ids,
+				static function ( int $action_id ): bool {
+					return ! ActionSchedulerClient::is_finished( $action_id );
+				}
+			)
+		);
+
 		return array(
-			'count'  => QueuedExecutionEngine::process_due_jobs(),
-			'view'   => $view,
-			'member' => $member,
+			'count'                => $count,
+			'view'                 => $view,
+			'member'               => $member,
+			'still_processing'     => ! empty( $remaining_action_ids ),
+			'remaining_action_ids' => $remaining_action_ids,
 		);
 	}
 
@@ -472,6 +540,9 @@ final class UserAssignmentPage {
 	 * @return void
 	 */
 	private static function render_sync_button( string $view, string $member = '' ): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only round-trip of ids from this page's own prior redirect into a hidden field; process_sync() re-verifies its own nonce before acting on anything.
+		$pending_actions = isset( $_GET[ self::QUERY_ARG_PENDING_ACTIONS ] ) ? sanitize_text_field( wp_unslash( $_GET[ self::QUERY_ARG_PENDING_ACTIONS ] ) ) : '';
+
 		echo '<form method="post">';
 		wp_nonce_field( self::NONCE_ACTION_SYNC );
 		echo '<input type="hidden" name="bits_groupsio_action" value="sync" />';
@@ -479,7 +550,10 @@ final class UserAssignmentPage {
 		if ( '' !== $member ) {
 			printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $member ) );
 		}
-		submit_button( __( 'Sync', 'bits-groupsio-sync' ), 'secondary', 'submit', false );
+		if ( '' !== $pending_actions ) {
+			printf( '<input type="hidden" name="%1$s" value="%2$s" />', esc_attr( self::QUERY_ARG_PENDING_ACTIONS ), esc_attr( $pending_actions ) );
+		}
+		submit_button( AccessKeys::label( __( 'Sync', 'bits-groupsio-sync' ), 'N' ), 'secondary', 'submit', false, array( 'accesskey' => 'N' ) );
 		echo '</form>';
 	}
 
@@ -539,7 +613,7 @@ final class UserAssignmentPage {
 				value="<?php echo esc_attr( $search ); ?>"
 				autofocus
 			/>
-			<button type="submit" class="button"><?php esc_html_e( 'Search', 'bits-groupsio-sync' ); ?></button>
+			<button type="submit" class="button" accesskey="H"><?php echo esc_html( AccessKeys::label( __( 'Search', 'bits-groupsio-sync' ), 'H' ) ); ?></button>
 		</form>
 		<?php
 	}
@@ -653,9 +727,9 @@ final class UserAssignmentPage {
 		echo '<h1>' . esc_html( self::details_heading( $email ) ) . '</h1>';
 
 		printf(
-			'<p><a href="%1$s">%2$s</a></p>',
+			'<p><a href="%1$s" accesskey="B">%2$s</a></p>',
 			esc_url( self::list_url() ),
-			esc_html__( 'Back to User Assignment', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Back to User Assignment', 'bits-groupsio-sync' ), 'B' ) )
 		);
 
 		self::render_sync_button( self::VIEW_DETAILS, $email );
@@ -711,9 +785,9 @@ final class UserAssignmentPage {
 	 */
 	private static function render_add_groups_link( string $email ): void {
 		printf(
-			'<p><a href="%1$s">%2$s</a></p>',
+			'<p><a href="%1$s" accesskey="A">%2$s</a></p>',
 			esc_url( self::add_groups_url( $email ) ),
-			esc_html__( 'Add groups', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Add groups', 'bits-groupsio-sync' ), 'A' ) )
 		);
 	}
 
@@ -762,7 +836,7 @@ final class UserAssignmentPage {
 				value="<?php echo esc_attr( $search ); ?>"
 				<?php echo $autofocus ? 'autofocus' : ''; ?>
 			/>
-			<button type="submit" class="button"><?php esc_html_e( 'Search', 'bits-groupsio-sync' ); ?></button>
+			<button type="submit" class="button" accesskey="H"><?php echo esc_html( AccessKeys::label( __( 'Search', 'bits-groupsio-sync' ), 'H' ) ); ?></button>
 		</form>
 		<?php
 	}
@@ -806,7 +880,7 @@ final class UserAssignmentPage {
 
 		echo '</tbody></table>';
 
-		submit_button( __( 'Remove Selected', 'bits-groupsio-sync' ) );
+		submit_button( AccessKeys::label( __( 'Remove Selected', 'bits-groupsio-sync' ), 'R' ), 'primary', 'submit', true, array( 'accesskey' => 'R' ) );
 		echo '</form>';
 
 		if ( 0 !== $confirm_parent_id ) {
@@ -824,10 +898,10 @@ final class UserAssignmentPage {
 	private static function render_group_row( string $email, array $group ): void {
 		$checkbox_id = 'bits-groupsio-group-' . $group['subgroup_id'];
 		$label       = sprintf(
-			/* translators: 1: group title, 2: group slug/namespace. */
+			/* translators: 1: group title, 2: group slug/namespace, reordered subgroup+parent. */
 			__( '%1$s (%2$s)', 'bits-groupsio-sync' ),
-			'' !== $group['subgroup_title'] ? $group['subgroup_title'] : $group['subgroup_slug'],
-			$group['subgroup_slug']
+			'' !== $group['subgroup_title'] ? $group['subgroup_title'] : self::subgroup_name_segment( $group['subgroup_slug'] ),
+			self::reversed_slug_for_display( $group['subgroup_slug'] )
 		);
 
 		echo '<tr>';
@@ -852,6 +926,49 @@ final class UserAssignmentPage {
 		}
 		echo '</td>';
 		echo '</tr>';
+	}
+
+	/**
+	 * Extracts the "sub" segment from a "parent+sub" slug, for the
+	 * fallback label a titleless group's row uses (#98) - the subgroup's
+	 * own name should lead the label, not the full parent+sub slug
+	 * (which is still shown as the label's parenthesized context, per
+	 * render_group_row()/render_addable_group_table(), but reordered -
+	 * see reversed_slug_for_display()). Mirrors SubgroupManagementPage's
+	 * own identical helper.
+	 *
+	 * @param string $slug Full slug.
+	 * @return string
+	 */
+	private static function subgroup_name_segment( string $slug ): string {
+		$pos = strpos( $slug, '+' );
+
+		return false === $pos ? $slug : substr( $slug, $pos + 1 );
+	}
+
+	/**
+	 * Reorders a "parent+sub" slug to "sub+parent" for display in a
+	 * group label's parenthesized context (#98 follow-up) - confirmed
+	 * with the primary contributor that the subgroup segment should lead
+	 * even in this secondary, fuller-context part of the label, not just
+	 * the primary title/name fallback subgroup_name_segment() already
+	 * handles. This is purely a display transformation - never used as
+	 * an actual Groups.io slug/address (the real address is always
+	 * parent-first; nothing here is sent back to the API or used to
+	 * look anything up). The parent group's own row (no '+' in its slug)
+	 * is returned unchanged, since there's nothing to reorder.
+	 *
+	 * @param string $slug Full slug, "parent+sub" form (or a bare parent slug).
+	 * @return string
+	 */
+	private static function reversed_slug_for_display( string $slug ): string {
+		$pos = strpos( $slug, '+' );
+
+		if ( false === $pos ) {
+			return $slug;
+		}
+
+		return substr( $slug, $pos + 1 ) . '+' . substr( $slug, 0, $pos );
 	}
 
 	/**
@@ -939,12 +1056,21 @@ final class UserAssignmentPage {
 		echo '<input type="hidden" name="bits_groupsio_action" value="confirm_parent_remove" />';
 		printf( '<input type="hidden" name="member" value="%s" />', esc_attr( $email ) );
 		printf( '<input type="hidden" name="subgroup_id" value="%s" />', esc_attr( (string) $parent_id ) );
-		submit_button( __( 'Yes, remove from the parent group', 'bits-groupsio-sync' ), 'primary delete', 'submit', false, array( 'autofocus' => 'autofocus' ) );
+		submit_button(
+			AccessKeys::label( __( 'Yes, remove from the parent group', 'bits-groupsio-sync' ), 'Y' ),
+			'primary delete',
+			'submit',
+			false,
+			array(
+				'autofocus' => 'autofocus',
+				'accesskey' => 'Y',
+			)
+		);
 		echo ' ';
 		printf(
-			'<a class="button" href="%s">%s</a>',
+			'<a class="button" href="%s" accesskey="L">%s</a>',
 			esc_url( self::details_url( $email ) ),
-			esc_html__( 'Cancel', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Cancel', 'bits-groupsio-sync' ), 'L' ) )
 		);
 		echo '</form></div>';
 	}
@@ -1026,9 +1152,9 @@ final class UserAssignmentPage {
 		echo '<h1>' . esc_html( self::add_groups_heading( $email ) ) . '</h1>';
 
 		printf(
-			'<p><a href="%1$s">%2$s</a></p>',
+			'<p><a href="%1$s" accesskey="B">%2$s</a></p>',
 			esc_url( self::details_url( $email ) ),
-			esc_html__( 'Back to Details', 'bits-groupsio-sync' )
+			esc_html( AccessKeys::label( __( 'Back to Details', 'bits-groupsio-sync' ), 'B' ) )
 		);
 
 		self::render_sync_button( self::VIEW_ADD_GROUPS, $email );
@@ -1105,7 +1231,7 @@ final class UserAssignmentPage {
 				value="<?php echo esc_attr( $search ); ?>"
 				autofocus
 			/>
-			<button type="submit" class="button"><?php esc_html_e( 'Search', 'bits-groupsio-sync' ); ?></button>
+			<button type="submit" class="button" accesskey="H"><?php echo esc_html( AccessKeys::label( __( 'Search', 'bits-groupsio-sync' ), 'H' ) ); ?></button>
 		</form>
 		<?php
 	}
@@ -1141,10 +1267,10 @@ final class UserAssignmentPage {
 		foreach ( $groups as $group ) {
 			$checkbox_id = 'bits-groupsio-addable-' . $group['subgroup_id'];
 			$label       = sprintf(
-				/* translators: 1: group title, 2: group slug/namespace. */
+				/* translators: 1: group title, 2: group slug/namespace, reordered subgroup+parent. */
 				__( '%1$s (%2$s)', 'bits-groupsio-sync' ),
-				'' !== $group['subgroup_title'] ? $group['subgroup_title'] : $group['subgroup_slug'],
-				$group['subgroup_slug']
+				'' !== $group['subgroup_title'] ? $group['subgroup_title'] : self::subgroup_name_segment( $group['subgroup_slug'] ),
+				self::reversed_slug_for_display( $group['subgroup_slug'] )
 			);
 
 			echo '<tr>';
@@ -1166,7 +1292,7 @@ final class UserAssignmentPage {
 
 		echo '</tbody></table>';
 
-		submit_button( __( 'Add Selected', 'bits-groupsio-sync' ) );
+		submit_button( AccessKeys::label( __( 'Add Selected', 'bits-groupsio-sync' ), 'A' ), 'primary', 'submit', true, array( 'accesskey' => 'A' ) );
 		echo '</form>';
 	}
 
@@ -1256,9 +1382,11 @@ final class UserAssignmentPage {
 			$message = sprintf( $template, $detail );
 		}
 
+		$known_types = array( 'success', 'warning', 'error' );
+
 		printf(
 			'<div class="notice notice-%1$s"><p>%2$s</p></div>',
-			esc_attr( 'success' === $type ? 'success' : 'error' ),
+			esc_attr( in_array( $type, $known_types, true ) ? $type : 'error' ),
 			esc_html( $message )
 		);
 	}
@@ -1267,17 +1395,22 @@ final class UserAssignmentPage {
 	 * Redirects to the Details view for one member with a fixed-vocabulary
 	 * notice code and exits.
 	 *
-	 * @param string $email  Member's email address.
-	 * @param string $code   One of the keys in self::notices().
-	 * @param string $detail Optional detail to interpolate into the notice template.
+	 * @param string $email       Member's email address.
+	 * @param string $code        One of the keys in self::notices().
+	 * @param string $detail      Optional detail to interpolate into the notice template.
+	 * @param int[]  $action_ids  Action Scheduler ids to carry forward as self::QUERY_ARG_PENDING_ACTIONS, if any.
 	 * @return void
 	 * @codeCoverageIgnore Calls exit; cannot run inside the test process. Its pure input-building logic is trivial (array literal + add_query_arg).
 	 */
-	private static function redirect_with_notice( string $email, string $code, string $detail = '' ): void {
+	private static function redirect_with_notice( string $email, string $code, string $detail = '', array $action_ids = array() ): void {
 		$args = array( 'bits_notice' => $code );
 
 		if ( '' !== $detail ) {
 			$args['bits_notice_detail'] = $detail;
+		}
+
+		if ( ! empty( $action_ids ) ) {
+			$args[ self::QUERY_ARG_PENDING_ACTIONS ] = implode( ',', $action_ids );
 		}
 
 		wp_safe_redirect( add_query_arg( $args, self::details_url( $email ) ) );
@@ -1287,9 +1420,17 @@ final class UserAssignmentPage {
 	/**
 	 * Redirects back to whichever view the "Sync" button was submitted
 	 * from (List, Details, or Add Groups), with a notice reporting how
-	 * many queued actions were processed.
+	 * many queued actions were processed - or, per #112, that one or
+	 * more of the ids the admin is specifically waiting on are still
+	 * processing (claimed and running via Action Scheduler's own
+	 * independent trigger, not yet reflected in this click's own
+	 * process_due_jobs() call). In that case the still-unfinished ids
+	 * are carried forward as self::QUERY_ARG_PENDING_ACTIONS so the next
+	 * "Sync" click keeps tracking them, rather than reporting the old
+	 * binary "no queued actions were due" that could read as "nothing
+	 * happened" when the job is actually mid-flight.
 	 *
-	 * @param array{count: int, view: string, member: string} $result process_sync()'s return value.
+	 * @param array{count: int, view: string, member: string, still_processing: bool, remaining_action_ids: int[]} $result process_sync()'s return value.
 	 * @return void
 	 * @codeCoverageIgnore Calls exit; cannot run inside the test process. Its pure input-building logic is trivial (array literal + add_query_arg).
 	 */
@@ -1301,9 +1442,16 @@ final class UserAssignmentPage {
 			$target = self::add_groups_url( $result['member'] );
 		}
 
-		$args = array( 'bits_notice' => $result['count'] > 0 ? 'jobs_processed' : 'no_jobs_due' );
-		if ( $result['count'] > 0 ) {
-			$args['bits_notice_detail'] = (string) $result['count'];
+		if ( $result['still_processing'] ) {
+			$args = array(
+				'bits_notice'                   => 'still_processing',
+				self::QUERY_ARG_PENDING_ACTIONS => implode( ',', $result['remaining_action_ids'] ),
+			);
+		} else {
+			$args = array( 'bits_notice' => $result['count'] > 0 ? 'jobs_processed' : 'no_jobs_due' );
+			if ( $result['count'] > 0 ) {
+				$args['bits_notice_detail'] = (string) $result['count'];
+			}
 		}
 
 		wp_safe_redirect( add_query_arg( $args, $target ) );

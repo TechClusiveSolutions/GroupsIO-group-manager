@@ -115,6 +115,24 @@ final class QueuedExecutionEngineTest extends WP_UnitTestCase {
 		$this->assertNotFalse( as_next_scheduled_action( self::HOOK ) );
 	}
 
+	/**
+	 * Per #112: queue_add()/queue_remove() now return the scheduled
+	 * action's own id (sourced from ActionSchedulerClient::schedule())
+	 * instead of void, so UserAssignmentPage can track it through the
+	 * post-submit redirect.
+	 */
+	public function test_queue_add_returns_the_scheduled_actions_id(): void {
+		$action_id = QueuedExecutionEngine::queue_add( 1, 'queued-add-id@example.test', 'Name', 900002, 'perception-is-all+list', 'List', 9 );
+
+		$this->assertGreaterThan( 0, $action_id );
+	}
+
+	public function test_queue_remove_returns_the_scheduled_actions_id(): void {
+		$action_id = QueuedExecutionEngine::queue_remove( 'queued-remove-id@example.test', 900003, 9 );
+
+		$this->assertGreaterThan( 0, $action_id );
+	}
+
 	public function test_execute_add_success_updates_index_records_audit_and_notification(): void {
 		$this->mock_response( $this->json_response( 200, array( 'object' => 'ok' ) ) );
 
@@ -344,5 +362,29 @@ final class QueuedExecutionEngineTest extends WP_UnitTestCase {
 	 */
 	public function test_process_due_jobs_returns_an_int(): void {
 		$this->assertGreaterThanOrEqual( 0, QueuedExecutionEngine::process_due_jobs() );
+	}
+
+	/**
+	 * #99's follow-up: the "Sync" button previously only processed
+	 * already-due queued jobs, which never included MemberIndex::sync()
+	 * itself (only hourly-scheduled) - a subgroup created via Subgroup
+	 * Management wasn't addable on User Assignment until the next hourly
+	 * sync, and clicking "Sync" didn't help. process_due_jobs() now
+	 * forces MemberIndex::sync() to run directly, confirmed here via the
+	 * same pre_http_request capture the other tests in this file use -
+	 * a getgroup call is sync()'s first live API call, so its presence
+	 * confirms sync() genuinely ran rather than process_due_jobs() only
+	 * returning early.
+	 */
+	public function test_process_due_jobs_forces_a_member_index_sync(): void {
+		// A zero/absent id makes MemberIndex::sync() return immediately
+		// after this one call, keeping the assertion focused on "did
+		// sync() run at all" without needing to mock its full call chain.
+		$this->mock_response( $this->json_response( 200, array( 'object' => 'group', 'id' => 0 ) ) );
+
+		QueuedExecutionEngine::process_due_jobs();
+
+		$this->assertNotNull( self::$last_request, 'process_due_jobs() never made an HTTP request - MemberIndex::sync() did not run.' );
+		$this->assertStringContainsString( 'getgroup', self::$last_request['url'] );
 	}
 }

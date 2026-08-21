@@ -2,6 +2,7 @@
 
 namespace BITS\GroupsIOSync\Tests\Unit\Admin;
 
+use BITS\GroupsIOSync\ActionSchedulerClient;
 use BITS\GroupsIOSync\Admin\UserAssignmentPage;
 use BITS\GroupsIOSync\MemberIndex;
 use BITS\GroupsIOSync\QueuedExecutionEngine;
@@ -233,7 +234,7 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		UserAssignmentPage::render();
 		$output = ob_get_clean();
 
-		$this->assertStringContainsString( 'Announcements (perception-is-all+announcements)', $output );
+		$this->assertStringContainsString( 'Announcements (announcements+perception-is-all)', $output );
 	}
 
 	public function test_details_view_shows_pmpro_expected_and_override_state_as_text(): void {
@@ -353,6 +354,7 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		$this->assertSame( 2, $result['queued_count'] );
 		$this->assertSame( 0, $result['parent_id'] );
 		$this->assertNotFalse( as_next_scheduled_action( self::HOOK ) );
+		$this->assertCount( 2, $result['action_ids'], 'One Action Scheduler id per queued (non-parent) group, per #112.' );
 	}
 
 	public function test_process_remove_selected_defers_the_parent_row_pending_confirmation(): void {
@@ -400,6 +402,36 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 
 		$this->assertFalse( $result['invalid'] );
 		$this->assertNotFalse( as_next_scheduled_action( self::HOOK ) );
+	}
+
+	public function test_process_confirm_parent_remove_also_queues_removal_from_every_subgroup(): void {
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 1, 'perception-is-all', '', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 2, 'perception-is-all+announcements', 'Announcements', 1 );
+		MemberIndex::apply_add( 0, 'target@example.test', 'Target', 3, 'perception-is-all+testgroup', 'Test Group', 1 );
+
+		$_POST['member']      = 'target@example.test';
+		$_POST['subgroup_id'] = '1';
+		$_POST['_wpnonce']    = wp_create_nonce( 'bits_groupsio_confirm_parent_remove' );
+		$_REQUEST['_wpnonce'] = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_confirm_parent_remove();
+
+		unset( $_POST['member'], $_POST['subgroup_id'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertFalse( $result['invalid'] );
+
+		$scheduled = as_get_scheduled_actions(
+			array(
+				'hook'     => self::HOOK,
+				'status'   => 'pending',
+				'per_page' => -1,
+			)
+		);
+		$this->assertCount(
+			3,
+			$scheduled,
+			'Confirming the parent removal must queue a remove for the parent and every subgroup the member belongs to, per #104.'
+		);
 	}
 
 	public function test_process_confirm_parent_remove_rejects_a_non_parent_subgroup_id(): void {
@@ -468,7 +500,7 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		UserAssignmentPage::render();
 		$output = ob_get_clean();
 
-		$this->assertStringContainsString( 'Announcements (perception-is-all+announcements)', $output );
+		$this->assertStringContainsString( 'Announcements (announcements+perception-is-all)', $output );
 	}
 
 	public function test_add_groups_view_excludes_groups_the_member_is_already_in(): void {
@@ -483,7 +515,7 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		UserAssignmentPage::render();
 		$output = ob_get_clean();
 
-		$this->assertStringContainsString( 'Announcements (perception-is-all+announcements)', $output );
+		$this->assertStringContainsString( 'Announcements (announcements+perception-is-all)', $output );
 		$this->assertStringNotContainsString( 'perception-is-all (perception-is-all)', $output );
 	}
 
@@ -557,6 +589,7 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		$this->assertFalse( $result['invalid'] );
 		$this->assertSame( 2, $result['queued_count'] );
 		$this->assertNotFalse( as_next_scheduled_action( self::HOOK ) );
+		$this->assertCount( 2, $result['action_ids'], 'One Action Scheduler id per queued group, per #112.' );
 	}
 
 	public function test_process_add_selected_ignores_ids_not_in_the_addable_set(): void {
@@ -716,6 +749,54 @@ final class UserAssignmentPageTest extends WP_UnitTestCase {
 		$this->assertGreaterThanOrEqual( 1, $result['count'] );
 		$this->assertSame( 'details', $result['view'] );
 		$this->assertSame( 'target@example.test', $result['member'] );
+	}
+
+	/**
+	 * Per #112: an id in bits_pending_actions that's still pending/
+	 * in-progress by the time process_sync() checks it (e.g. claimed and
+	 * running via Action Scheduler's own independent WP-Cron/async
+	 * trigger, not this click's own process_due_jobs() call) must be
+	 * reported as still processing rather than silently dropped.
+	 */
+	public function test_process_sync_reports_still_processing_when_a_tracked_action_is_not_finished(): void {
+		$action_id = ActionSchedulerClient::schedule( array( 'job_action' => 'add' ), time() + HOUR_IN_SECONDS );
+
+		$_POST['sync_view']             = 'details';
+		$_POST['member']                = 'target@example.test';
+		$_POST['bits_pending_actions']  = (string) $action_id;
+		$_POST['_wpnonce']              = wp_create_nonce( 'bits_groupsio_sync' );
+		$_REQUEST['_wpnonce']           = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_sync();
+
+		unset( $_POST['sync_view'], $_POST['member'], $_POST['bits_pending_actions'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertTrue( $result['still_processing'] );
+		$this->assertSame( array( $action_id ), $result['remaining_action_ids'] );
+	}
+
+	/**
+	 * The counterpart to the test above: once every tracked id has
+	 * actually reached a terminal Action Scheduler status, process_sync()
+	 * must not report still-processing - the existing "N processed"/"no
+	 * queued actions were due" notice logic is unchanged in that case.
+	 */
+	public function test_process_sync_does_not_report_still_processing_once_all_tracked_actions_are_finished(): void {
+		$action_id = ActionSchedulerClient::schedule( array( 'job_action' => 'add' ), time() );
+		\ActionScheduler_Store::instance()->mark_complete( $action_id );
+
+		$_POST['sync_view']            = 'details';
+		$_POST['member']               = 'target@example.test';
+		$_POST['bits_pending_actions'] = (string) $action_id;
+		$_POST['_wpnonce']             = wp_create_nonce( 'bits_groupsio_sync' );
+		$_REQUEST['_wpnonce']          = $_POST['_wpnonce'];
+
+		$result = UserAssignmentPage::process_sync();
+
+		unset( $_POST['sync_view'], $_POST['member'], $_POST['bits_pending_actions'], $_POST['_wpnonce'], $_REQUEST['_wpnonce'] );
+
+		$this->assertFalse( $result['still_processing'] );
+		$this->assertSame( array(), $result['remaining_action_ids'] );
 	}
 
 	public function test_process_remove_selected_blocks_removing_the_owner_from_the_parent_group(): void {

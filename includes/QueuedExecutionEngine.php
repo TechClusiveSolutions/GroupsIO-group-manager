@@ -29,11 +29,20 @@ if ( ! defined( 'ABSPATH' ) ) {
  * these jobs - it delegates the actual index update to
  * MemberIndex::apply_add()/apply_remove(), the audit write to
  * AuditLog::record(), and the admin-facing outcome to
- * AdminNotifications::add().
+ * AdminNotifications::add(). process_due_jobs() (the admin-facing
+ * "Sync" control's handler) is the one exception - it also forces
+ * MemberIndex::sync() itself to run, per #99's follow-up, since that's
+ * the one other on-demand "make everything current now" action the
+ * Sync button needs to cover.
  */
 final class QueuedExecutionEngine {
 
-	private const HOOK = 'bits_groupsio_execute_queued_action';
+	/**
+	 * Also read by ActionSchedulerClient::schedule() - not private, since
+	 * that class is the one place besides register()/execute() below that
+	 * needs to know which hook a scheduled action id belongs to.
+	 */
+	public const HOOK = 'bits_groupsio_execute_queued_action';
 
 	private const MAX_ATTEMPTS = 3;
 
@@ -67,7 +76,13 @@ final class QueuedExecutionEngine {
 	 * @param string $subgroup_slug  Full slug of the group/subgroup to add to.
 	 * @param string $subgroup_title Cosmetic title, if any.
 	 * @param int    $admin_user_id  WP user id of the admin queuing the action.
-	 * @return void
+	 * @return int The scheduled action's id (0 if scheduling failed). The
+	 *             auto-queued parent-add's own id (see
+	 *             maybe_queue_parent_add() below) is never returned here -
+	 *             only the id of the action the caller directly requested,
+	 *             per the existing "does not change the visible
+	 *             queued-count" precedent already established for that
+	 *             auto-add.
 	 */
 	public static function queue_add(
 		int $user_id,
@@ -77,8 +92,8 @@ final class QueuedExecutionEngine {
 		string $subgroup_slug,
 		string $subgroup_title,
 		int $admin_user_id
-	): void {
-		self::schedule(
+	): int {
+		$action_id = ActionSchedulerClient::schedule(
 			array(
 				'job_action'     => 'add',
 				'user_id'        => $user_id,
@@ -94,6 +109,8 @@ final class QueuedExecutionEngine {
 		);
 
 		self::maybe_queue_parent_add( $user_id, $email, $display_name, $subgroup_slug, $admin_user_id );
+
+		return $action_id;
 	}
 
 	/**
@@ -159,10 +176,10 @@ final class QueuedExecutionEngine {
 	 * @param string $email         Member's email address.
 	 * @param int    $subgroup_id   Numeric Groups.io group/subgroup id to remove from.
 	 * @param int    $admin_user_id WP user id of the admin queuing the action.
-	 * @return void
+	 * @return int The scheduled action's id (0 if scheduling failed).
 	 */
-	public static function queue_remove( string $email, int $subgroup_id, int $admin_user_id ): void {
-		self::schedule(
+	public static function queue_remove( string $email, int $subgroup_id, int $admin_user_id ): int {
+		return ActionSchedulerClient::schedule(
 			array(
 				'job_action'    => 'remove',
 				'email'         => $email,
@@ -172,21 +189,6 @@ final class QueuedExecutionEngine {
 			),
 			time()
 		);
-	}
-
-	/**
-	 * Schedules one job as an Action Scheduler single action.
-	 *
-	 * @param array<string, mixed> $job       Job data - see queue_add()/queue_remove().
-	 * @param int                  $timestamp Unix timestamp to run the job at - time() to run as close to immediately as Action Scheduler's own runner cadence allows, or a later time for a retry's backoff delay.
-	 * @return void
-	 */
-	private static function schedule( array $job, int $timestamp ): void {
-		if ( ! function_exists( 'as_schedule_single_action' ) ) {
-			return;
-		}
-
-		as_schedule_single_action( $timestamp, self::HOOK, array( $job ), '', false );
 	}
 
 	/**
@@ -211,7 +213,7 @@ final class QueuedExecutionEngine {
 		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
 			if ( $attempt < self::MAX_ATTEMPTS ) {
 				$job['attempt'] = $attempt + 1;
-				self::schedule( $job, time() + self::RETRY_DELAY_SECONDS );
+				ActionSchedulerClient::schedule( $job, time() + self::RETRY_DELAY_SECONDS );
 				return;
 			}
 
@@ -332,18 +334,38 @@ final class QueuedExecutionEngine {
 	}
 
 	/**
-	 * Forces Action Scheduler to process any currently-due queued jobs
-	 * immediately, rather than waiting on WP-Cron's own timing. A thin
-	 * wrapper around Action Scheduler's own queue runner - the same call
-	 * WP-Cron itself uses to process due actions - not a reimplementation
-	 * of queue-draining logic. Not scoped to this plugin's own hook or to
-	 * any particular member/page; it runs whatever Action Scheduler
-	 * considers due, system-wide. Backs the admin-facing "Sync" control
-	 * on the GroupsIO Management pages.
+	 * Backs the admin-facing "Sync" control on the GroupsIO Management
+	 * pages: forces MemberIndex::sync() to run right now (it's normally
+	 * only hourly-scheduled, per MemberIndex::maybe_schedule_sync()), then
+	 * forces Action Scheduler to process any currently-due queued jobs
+	 * immediately, rather than waiting on WP-Cron's own timing - this
+	 * picks up not only pre-existing pending jobs but also any add jobs
+	 * MemberIndex::sync()'s own parent-group reconciliation step (#100)
+	 * just queued, in the same click. Direct, synchronous calls (not
+	 * queued themselves) - the admin clicking "Sync" is explicitly asking
+	 * to wait for this to happen now, the same tradeoff every other
+	 * "Sync" click already makes.
 	 *
-	 * @return int Number of actions processed.
+	 * Found via manual testing (#99's follow-up): a subgroup created via
+	 * Subgroup Management wasn't addable on User Assignment until the
+	 * next hourly sync, and the "Sync" button didn't help, since it only
+	 * ever processed already-due queued jobs - MemberIndex::sync() itself
+	 * was never "due" outside its own hourly schedule.
+	 *
+	 * The Action Scheduler portion is a thin wrapper around Action
+	 * Scheduler's own queue runner - the same call WP-Cron itself uses to
+	 * process due actions - not a reimplementation of queue-draining
+	 * logic. Not scoped to this plugin's own hook or to any particular
+	 * member/page; it runs whatever Action Scheduler considers due,
+	 * system-wide.
+	 *
+	 * @return int Number of queued actions processed (MemberIndex::sync()
+	 *             itself isn't counted here - only jobs Action Scheduler
+	 *             actually ran, which may include some sync() just queued).
 	 */
 	public static function process_due_jobs(): int {
+		MemberIndex::sync();
+
 		if ( ! class_exists( 'ActionScheduler_QueueRunner' ) ) {
 			return 0;
 		}

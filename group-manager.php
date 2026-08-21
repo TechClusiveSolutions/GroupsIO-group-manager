@@ -29,8 +29,13 @@ if ( file_exists( BITS_GROUPSIO_SYNC_DIR . 'vendor/autoload.php' ) ) {
 	require_once BITS_GROUPSIO_SYNC_DIR . 'vendor/autoload.php';
 }
 
-if ( file_exists( BITS_GROUPSIO_SYNC_DIR . 'vendor/woocommerce/action-scheduler/action-scheduler.php' ) ) {
-	require_once BITS_GROUPSIO_SYNC_DIR . 'vendor/woocommerce/action-scheduler/action-scheduler.php';
+// composer.json requires woocommerce/action-scheduler, but that package's
+// own composer.json declares "type": "wordpress-plugin" - this project's
+// own installer-paths config (see composer.json's "extra" section)
+// redirects any "wordpress-plugin"-typed package to vendor/wordpress-plugins/,
+// not composer's usual vendor/<vendor-name>/ layout. See #114.
+if ( file_exists( BITS_GROUPSIO_SYNC_DIR . 'vendor/wordpress-plugins/action-scheduler/action-scheduler.php' ) ) {
+	require_once BITS_GROUPSIO_SYNC_DIR . 'vendor/wordpress-plugins/action-scheduler/action-scheduler.php';
 }
 
 register_activation_hook( __FILE__, array( 'BITS\GroupsIOSync\AuditLog', 'activate' ) );

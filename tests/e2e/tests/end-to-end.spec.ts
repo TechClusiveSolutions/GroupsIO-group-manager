@@ -43,7 +43,7 @@ test( 'login through a full subgroup create/update/delete lifecycle', async ( { 
 		await expect( page.getByRole( 'heading', { name: 'Create Subgroup' } ) ).toBeVisible();
 
 		await page.getByLabel( 'Name', { exact: true } ).fill( initialName );
-		await page.getByRole( 'button', { name: 'Create', exact: true } ).click();
+		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
 
 		await expect( page.getByText( 'Subgroup creation submitted' ) ).toBeVisible();
 		await expect( page.getByRole( 'link', { name: new RegExp( `${ initialName }@` ) } ) ).toHaveCount( 0 );
@@ -56,7 +56,11 @@ test( 'login through a full subgroup create/update/delete lifecycle', async ( { 
 	await test.step( 'open its Details view and view its member list (the API account is auto-added as owner on creation)', async () => {
 		await page.getByRole( 'link', { name: new RegExp( `${ initialName }@` ) } ).click();
 		await expect( page.getByRole( 'heading', { name: 'Subgroup Details' } ) ).toBeVisible();
-		await expect( page.getByText( 'e2e-owner@example.test' ) ).toBeVisible();
+		// exact: true - the Sync control's own reconciliation (#100) can leave
+		// a persistent "Added e2e-owner@example.test to the group." notice
+		// from an earlier step/test, which a loose substring match would
+		// also match; exact matching resolves only the member list's <li>.
+		await expect( page.getByText( 'e2e-owner@example.test', { exact: true } ) ).toBeVisible();
 	} );
 
 	await test.step( 'rename it via the Details view and Sync to force the queued update through (another Groups.io update)', async () => {

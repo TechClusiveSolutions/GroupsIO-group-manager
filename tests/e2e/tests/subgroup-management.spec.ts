@@ -34,7 +34,7 @@ test.describe( 'Subgroup Management edge cases', () => {
 
 	test( 'submitting Create with a blank name does not create anything', async ( { page } ) => {
 		await page.getByRole( 'link', { name: 'Create new subgroup' } ).click();
-		await page.getByRole( 'button', { name: 'Create', exact: true } ).click();
+		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
 
 		// HTML5 "required" blocks submission client-side; the page should
 		// simply still be the create form.
@@ -48,7 +48,7 @@ test.describe( 'Subgroup Management edge cases', () => {
 		// immediate "submitted" response here, not a synchronous error.
 		await page.getByRole( 'link', { name: 'Create new subgroup' } ).click();
 		await page.getByLabel( 'Name', { exact: true } ).fill( 'fixture-subgroup' );
-		await page.getByRole( 'button', { name: 'Create', exact: true } ).click();
+		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
 
 		await expect( page.getByText( 'Subgroup creation submitted' ) ).toBeVisible();
 	} );
@@ -57,8 +57,12 @@ test.describe( 'Subgroup Management edge cases', () => {
 		await page.getByRole( 'link', { name: /fixture-subgroup@/ } ).click();
 
 		await expect( page.getByRole( 'heading', { name: 'Subgroup Details' } ) ).toBeVisible();
-		await expect( page.getByText( 'fixture-member-1@example.test' ) ).toBeVisible();
-		await expect( page.getByText( 'fixture-member-2@example.test' ) ).toBeVisible();
+		// exact: true - the Sync control's own reconciliation (#100) can leave
+		// a persistent "Added ... to the group." notice from an earlier
+		// step/test, which a loose substring match would also match; exact
+		// matching resolves only the member list's <li>.
+		await expect( page.getByText( 'fixture-member-1@example.test', { exact: true } ) ).toBeVisible();
+		await expect( page.getByText( 'fixture-member-2@example.test', { exact: true } ) ).toBeVisible();
 
 		await page.getByLabel( 'Title (optional)' ).fill( 'Fixture Title' );
 		await page.getByRole( 'button', { name: 'Update' } ).click();
@@ -96,7 +100,7 @@ test.describe( 'Subgroup Management edge cases', () => {
 		const secondName = `distinct-row-${ Date.now() }`;
 		await page.getByRole( 'link', { name: 'Create new subgroup' } ).click();
 		await page.getByLabel( 'Name', { exact: true } ).fill( secondName );
-		await page.getByRole( 'button', { name: 'Create', exact: true } ).click();
+		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
 		await expect( page.getByText( 'Subgroup creation submitted' ) ).toBeVisible();
 
 		await page.getByRole( 'button', { name: 'Sync' } ).click();
