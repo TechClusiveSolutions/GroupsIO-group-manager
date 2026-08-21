@@ -542,6 +542,93 @@ potentially many subgroups make a fully synchronous request impractical.
     reason. The prior synchronous `process_*()` methods never wrote to
     the audit log at all - a real gap this change also closes, since
     every other Groups.io-touching action in the plugin already does.
+* **Action Scheduler status tracking — added 2026-08-18**: the "Sync"
+  button's notice ("N queued action(s) processed." / "No queued actions
+  were due.") is not a reliable signal that a job just queued in the
+  *same* admin session has actually finished. Investigated and documented
+  in GitHub Discussion #110: Action Scheduler claims due actions
+  exclusively (`ActionScheduler_DBStore::claim_actions()`'s
+  `WHERE claim_id = 0 AND scheduled_date_gmt <= NOW() ... FOR UPDATE
+  SKIP LOCKED`), and it runs itself independently of this plugin's own
+  manual trigger — a real WP-Cron event (`action_scheduler_run_queue`,
+  every minute) and a separate async dispatcher hooked to WordPress's
+  own `shutdown` action can both claim and run a just-queued job before
+  the admin's next "Sync" click gets to it. When that happens, the Sync
+  click's own `process_due_jobs()` call correctly finds nothing left to
+  claim and reports "No queued actions were due" — technically true, but
+  misleading, since the job already ran (or is mid-flight) via that
+  other, invisible request. Confirmed as a known, upstream-documented
+  class of behavior (not unique to this plugin's usage), not something
+  Action Scheduler itself is expected to eliminate — see the discussion
+  for the two related upstream issues cited
+  (woocommerce/action-scheduler#457, #793) and why polling the
+  *specific* queued job's own status is the standard way around it,
+  rather than trusting the queue runner's aggregate processed-count.
+  * **New `includes/ActionSchedulerClient.php`**: the one seam that
+    calls Action Scheduler's `as_*()` functions directly — currently
+    that call (`as_schedule_single_action()`) is inlined in
+    `QueuedExecutionEngine::schedule()`, with no equivalent status-read
+    seam existing anywhere. Single responsibility, matching
+    `CLAUDE.md`'s one-class-one-purpose rule: this class owns nothing
+    but "talk to Action Scheduler," not queuing/retry logic itself
+    (which stays in `QueuedExecutionEngine`/`SubgroupExecutionEngine`).
+    * `schedule( array $job, int $timestamp ): int` — wraps
+      `as_schedule_single_action()`, returning the scheduled action's
+      ID (0 if Action Scheduler is unavailable, matching the existing
+      `function_exists( 'as_schedule_single_action' )` guard's current
+      no-op behavior).
+    * `get_status( int $action_id ): ?string` — wraps Action
+      Scheduler's own status lookup (`ActionScheduler_Store::instance()
+      ->get_status( $action_id )`), returning one of Action Scheduler's
+      own status strings (`pending` / `in-progress` / `complete` /
+      `failed` / `canceled`), or `null` if the action id is unknown or
+      Action Scheduler isn't available.
+    * `is_finished( int $action_id ): bool` — convenience wrapper;
+      `true` for `complete`/`failed`/`canceled`, `false` for
+      `pending`/`in-progress` or an unknown/unavailable id.
+  * **`QueuedExecutionEngine::queue_add()`/`queue_remove()` now return
+    the queued action's id** (`int`, 0 on failure to schedule) instead
+    of `void`, sourced from `ActionSchedulerClient::schedule()`'s return
+    value. `queue_add()`'s auto-queued parent-add (this section, above)
+    also returns its own id from `maybe_queue_parent_add()`, but per the
+    existing "does not change the visible queued-count" precedent
+    already established for that auto-add, its id is not surfaced to
+    the caller — only the id of the action the admin's own click
+    directly requested is tracked.
+  * **`UserAssignmentPage::process_add_selected()`/
+    `process_remove_selected()`** collect the returned action ids
+    (one per checked group) into an array instead of only a count, and
+    pass that array through the post-submit redirect as a query arg
+    (e.g. `bits_pending_actions=123,124,125`) — a plain list of opaque
+    integers, not user-supplied or sensitive, so a query arg is
+    sufficient; no new transient/session storage needed.
+  * **Sync notice becomes per-tracked-job, not just a raw count**:
+    `process_sync()` reads any `bits_pending_actions` ids present in the
+    request (round-tripped from the view that submitted Sync, the same
+    way `sync_view`/`member` already round-trip today), and after
+    calling `QueuedExecutionEngine::process_due_jobs()` checks each
+    tracked id's status via `ActionSchedulerClient::is_finished()`. If
+    every tracked id is finished, the existing "N processed" /
+    "no queued actions were due" notice logic is unchanged (nothing new
+    to report). If one or more tracked ids are *not* yet finished
+    (claimed and running elsewhere, or still pending), the notice
+    instead reads "Still processing — click Sync again in a moment" (or
+    equivalent copy, finalized at implementation time with a screen
+    reader pass) rather than the previous binary framing that could
+    read as "nothing happened" when the job is actually mid-flight.
+    Once a tracked id's job actually completes (whether via this click,
+    a later click, or Action Scheduler's own independent trigger),
+    `bits_pending_actions` naturally stops being passed forward (each
+    view's own Sync form only round-trips ids relevant to the page the
+    admin is currently viewing, sourced fresh from that page's own
+    render — not accumulated indefinitely across unrelated page visits).
+  * **Scope**: this addendum covers `QueuedExecutionEngine`'s
+    add/remove jobs and the User Assignment pages' Sync control only.
+    `SubgroupExecutionEngine` (this section, above) already has a
+    different notification policy (failure-only, no success notice) and
+    is not affected by this change — its own Sync-button interaction is
+    unchanged unless a future amendment extends this same pattern to
+    it.
 
 ### 9. Admin Pages: Menu Structure
 
