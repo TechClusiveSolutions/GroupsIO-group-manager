@@ -8,7 +8,7 @@ This document settles the implementation-level decisions that the PRD, Security 
 
 ### 2. Tooling
 
-* Dependency management: Composer, with a committed `composer.lock` for reproducible installs.
+* Dependency management: Composer. **`composer.lock` is deliberately not committed** — a lock file generated on a contributor's newer local PHP version has previously pinned dependency versions incompatible with CI's PHP 8.0 matrix, breaking CI in a way that wasn't visible from the diff. `composer.lock` is fine to exist locally (and does, for whichever PHP version a contributor's own machine runs); it must simply never be `git add`ed. Reproducibility across environments instead comes from the version constraints in `composer.json` plus CI always installing fresh against its own pinned PHP 8.0 matrix.
 * Linting: PHP_CodeSniffer with the WordPress Coding Standards (WPCS) ruleset, run locally and in CI.
 * Static analysis: PHPStan (level to be set once the codebase exists and a realistic baseline can be established — starting stricter and loosening only with justification, not the reverse).
 * The Action Scheduler library is included as a Composer dependency (`woocommerce/action-scheduler`) rather than copy-pasted, so it can be updated via normal dependency management.
@@ -43,7 +43,8 @@ Resolved (deferred from the Security document, section 4): the nightly reconcili
 
 ### 9. Test-Execution Mechanics
 
-* Local: `composer test` runs the full unit PHPUnit suite (`vendor/bin/phpunit`). The integration suite runs separately via `vendor/bin/phpunit -c phpunit.integration.xml.dist`, requiring local environment variables for the test credential.
+* Local: `composer test` runs the full unit PHPUnit suite (`vendor/bin/phpunit`). The integration suite runs separately via `vendor/bin/phpunit -c phpunit.integration.xml.dist`, requiring local environment variables for the test credential. See `CONTRIBUTING.md`'s Local Development Setup section for the one-time environment setup this depends on (WordPress core test suite bootstrap, a MySQL/MariaDB client for `install-wp-tests.sh`, `wp-env`'s dynamically-assigned MySQL port).
+* `composer test-coverage` runs the same suite with coverage instrumentation (`XDEBUG_MODE=coverage vendor/bin/phpunit --coverage-text --coverage-clover=coverage.xml`), matching CI's own invocation exactly so the 80% gate (below) can be checked locally before pushing. Requires a coverage driver (Xdebug or PCOV) installed for the local PHP CLI — not installed by default.
 * **Changed 2026-08-11**: CI automatically runs the unit suite and the Playwright e2e suite on every pull request, per the Testing Standard document; coverage is computed from the unit suite only and gated at 80%. The integration suite no longer runs automatically — it runs only via manual dispatch of the `integration.yml` workflow (per `docs/ci.md` section 3.3), and a contributor touching Groups.io-calling code is expected to trigger it manually before requesting merge approval.
 
 ### 10. Branch Naming and Changelog Discipline
