@@ -17,6 +17,28 @@ Thank you for your interest in contributing to the BITS Groups.io Membership Syn
   * `docs/*` — documentation-only changes.
   * `infra/*` — tooling, CI, and other infrastructure work that isn't itself part of the plugin's shipped behavior.
 
+## Local Development Setup
+
+Prerequisites:
+
+* PHP 8.0 or newer, with the `dom`, `simplexml`, `xml`, `mbstring`, `mysql`, and `zip` extensions.
+* [Composer](https://getcomposer.org/).
+* Node.js and npm (for `wp-env` and the Playwright e2e suite).
+* Docker and Docker Compose (`wp-env` runs a local WordPress site in containers).
+* A MySQL/MariaDB **client** binary (`mysqladmin`) on the machine running the tests — see the note below. On Debian/Ubuntu this is the `mariadb-client` package; it is not installed by default on a minimal server image and is easy to miss.
+
+Setup steps:
+
+1. `npm install` — installs `@wordpress/env` and `@playwright/test`, this repo's only JS dependencies (the plugin itself has no JS runtime dependency).
+2. `composer install` — installs PHP dependencies. **`composer.lock` is intentionally not committed to this repo** (see `docs/implementation-standard.md` section 2): a committed lock file generated on a newer local PHP version has previously pinned dependency versions incompatible with CI's PHP 8.0 matrix, breaking CI for reasons invisible from the diff. It is fine — expected, even — for `composer.lock` to exist locally; just never `git add` it.
+3. `npx wp-env start` — brings up the Docker-based WordPress dev site at `http://localhost:8888` (configurable via `.wp-env.json`'s `port`). The plugin is auto-mounted and auto-activated. `wp-env`'s own separate built-in test environment (`testsEnvironment` in `.wp-env.json`, normally on port 8889) is **disabled and not used** for this project — the PHPUnit test suite (below) runs against `wp-env`'s dev-site MySQL container instead, via `bin/install-wp-tests.sh`.
+4. Run `composer test` once. The first run installs the WordPress core PHPUnit test suite via `bin/install-wp-tests.sh` into `/tmp/wordpress-tests-lib`/`/tmp/wordpress`, and requires a MySQL/MariaDB **client** to actually create the `wordpress_test` database as part of that install:
+   * **If `mysqladmin` isn't installed**, `install-wp-tests.sh`'s `mysqladmin create` step fails, but the script does not error loudly or stop — the database simply never gets created, and the only symptom is a much later, confusing WordPress `wp_die()` "Cannot select database" failure when `composer test` actually runs. Install the client first (`sudo apt install mariadb-client` on Debian/Ubuntu) if you hit this.
+   * `wp-env`'s MySQL host port is dynamically assigned by Docker and **can change** whenever `wp-env`'s containers are recreated (e.g. after editing `.wp-env.json` and re-running `npx wp-env start`, or after `npx wp-env destroy`). Find the current port with `docker ps` (look for the `...-mysql-1` container's forwarded port) and update `/tmp/wordpress-tests-lib/wp-tests-config.php`'s `DB_HOST` constant to match if `composer test` suddenly starts failing with a database connection error after previously working.
+   * Export `WP_TESTS_DIR=/tmp/wordpress-tests-lib` in your shell profile so it doesn't need to be re-exported every session (the `sys_get_temp_dir()`-based default in `tests/bootstrap.php` happens to match, but setting it explicitly avoids relying on that coincidence).
+5. For code coverage locally: install a coverage driver (Xdebug or PCOV) for your PHP CLI — e.g. `sudo apt install php8.4-xdebug` (adjust the version to match your PHP CLI). Xdebug adds overhead to every PHP CLI invocation unless its mode is explicitly scoped down, so set `xdebug.mode=off` as the default in its ini file and let `composer test-coverage` (which sets `XDEBUG_MODE=coverage` for just that one run) opt back in only when actually measuring coverage.
+6. For the e2e suite: `npx playwright install --with-deps chromium` once (downloads the browser binary and any missing OS-level dependencies — a large download, but only needed once per machine), then `npx playwright test`.
+
 ## Making a Change
 
 1. Confirm a GitHub issue exists for your change, with complete acceptance criteria (Given/When/Then for features, including at least one accessibility-focused scenario; Steps to Reproduce/Expected/Actual/Given-When-Then for bugs).

@@ -8,8 +8,8 @@ This document specifies how testing works for this project: framework, environme
 
 ### 2. Frameworks and Environments
 
-* **Unit and integration test framework**: PHPUnit, run against the WordPress core PHPUnit test suite bootstrap (via `wp-env`'s built-in test environment, or the standard `install-wp-tests.sh` script), so tests can exercise real WordPress functions, hooks, and a real (throwaway) test database rather than hand-mocking WordPress core behavior.
-* **Local development environment**: `wp-env` (the official WordPress Docker-based tool) for day-to-day iteration. This does not carry a real PMPro license or WordPress.com-specific behavior, so it is for fast dev-loop iteration only.
+* **Unit and integration test framework**: PHPUnit, run against the WordPress core PHPUnit test suite bootstrap via the standard `install-wp-tests.sh` script, so tests can exercise real WordPress functions, hooks, and a real (throwaway) test database rather than hand-mocking WordPress core behavior. `install-wp-tests.sh` is pointed at `wp-env`'s own dev-site MySQL container as its database host, rather than a separate database — see `CONTRIBUTING.md`'s Local Development Setup section.
+* **Local development environment**: `wp-env` (the official WordPress Docker-based tool), dev site only — `wp-env`'s own separate built-in test environment (normally a second WordPress instance on port 8889) is explicitly disabled (`testsEnvironment: false` in `.wp-env.json`) and excluded from all development work; only the single dev site is used, for both manual verification and as the database host for `install-wp-tests.sh`. This does not carry a real PMPro license or WordPress.com-specific behavior, so it is for fast dev-loop iteration only.
 * **Pre-release validation environment**: the WordPress.com Business Plan staging site, a full mirror of the live BITS site including its real PMPro configuration. This is where Phase 9's hardening pass happens; it is not part of the automated CI test run.
 
 ### 3. Unit Tests
@@ -39,6 +39,7 @@ This document specifies how testing works for this project: framework, environme
 
 * CI enforces an 80% code coverage threshold as a gate, per `CLAUDE.md`. Coverage is computed from the unit test suite; integration test coverage is not counted toward this threshold, since integration tests depend on external network availability and shouldn't be a hard blocker for the coverage gate itself.
 * A pull request that drops coverage below the threshold fails CI and cannot merge.
+* `composer test-coverage` runs the same coverage measurement locally (see `docs/implementation-standard.md` section 9), so this gate can be checked before pushing rather than only discovered via CI.
 
 ### 6. Accessibility Testing
 
