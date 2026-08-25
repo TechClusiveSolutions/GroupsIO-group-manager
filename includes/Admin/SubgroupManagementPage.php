@@ -9,9 +9,9 @@ namespace BITS\GroupsIOSync\Admin;
 
 use BITS\GroupsIOSync\GroupsIoApiClient;
 use BITS\GroupsIOSync\GroupsIoApiException;
-use BITS\GroupsIOSync\GroupsIoRateLimitException;
 use BITS\GroupsIOSync\GroupsIoTransportException;
 use BITS\GroupsIOSync\QueuedExecutionEngine;
+use BITS\GroupsIOSync\SubgroupExecutionEngine;
 use BITS\GroupsIOSync\SubgroupIdCache;
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -56,24 +56,27 @@ final class SubgroupManagementPage {
 	 */
 	private static function notices(): array {
 		return array(
-			'created'              => array( 'success', __( 'Subgroup created.', 'bits-groupsio-sync' ) ),
-			'updated'              => array( 'success', __( 'Subgroup updated.', 'bits-groupsio-sync' ) ),
-			'deleted'              => array( 'success', __( 'Subgroup deleted.', 'bits-groupsio-sync' ) ),
-			/* translators: %s: plain-language detail of why the create request failed. */
-			'create_failed'        => array( 'error', __( 'Could not create the subgroup: %s', 'bits-groupsio-sync' ) ),
-			/* translators: %s: plain-language detail of why the title could not be set. */
-			'created_title_failed' => array( 'error', __( 'The subgroup was created, but its title could not be set: %s Find it in the list below and set the title from its Details page.', 'bits-groupsio-sync' ) ),
-			/* translators: %s: plain-language detail of why the description could not be confirmed. */
-			'created_desc_failed'  => array( 'error', __( 'The subgroup was created, but its description could not be confirmed: %s Find it in the list below and check its Details page.', 'bits-groupsio-sync' ) ),
+			'updated'          => array( 'success', __( 'Subgroup updated.', 'bits-groupsio-sync' ) ),
+			'deleted'          => array( 'success', __( 'Subgroup deleted.', 'bits-groupsio-sync' ) ),
 			/* translators: %s: plain-language detail of why the update request failed. */
-			'update_failed'        => array( 'error', __( 'Could not update the subgroup: %s', 'bits-groupsio-sync' ) ),
+			'update_failed'    => array( 'error', __( 'Could not update the subgroup: %s', 'bits-groupsio-sync' ) ),
 			/* translators: %s: plain-language detail of why the delete request failed. */
-			'delete_failed'        => array( 'error', __( 'Could not delete the subgroup: %s', 'bits-groupsio-sync' ) ),
-			'invalid_request'      => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
-			'not_found'            => array( 'error', __( 'That subgroup could not be found under the configured parent group. It may have already been renamed or deleted.', 'bits-groupsio-sync' ) ),
+			'delete_failed'    => array( 'error', __( 'Could not delete the subgroup: %s', 'bits-groupsio-sync' ) ),
+			'invalid_request'  => array( 'error', __( 'The request could not be processed. Please try again.', 'bits-groupsio-sync' ) ),
+			'not_found'        => array( 'error', __( 'That subgroup could not be found under the configured parent group. It may have already been renamed or deleted.', 'bits-groupsio-sync' ) ),
+			// Added 2026-08-12 (#50): create/update/delete's actual
+			// Groups.io write and its confirmation now happen in a
+			// queued job (SubgroupExecutionEngine) rather than
+			// synchronously in this request - these three notices are
+			// the immediate "accepted" response; a genuine eventual
+			// failure surfaces later via AdminNotifications instead,
+			// since the admin may no longer be on this page by then.
+			'create_submitted' => array( 'success', __( 'Subgroup creation submitted - it will appear here shortly.', 'bits-groupsio-sync' ) ),
+			'update_submitted' => array( 'success', __( 'Subgroup update submitted - it will be reflected here shortly.', 'bits-groupsio-sync' ) ),
+			'delete_submitted' => array( 'success', __( 'Subgroup deletion submitted - it will be removed from the list shortly.', 'bits-groupsio-sync' ) ),
 			/* translators: %s: number of queued actions processed. */
-			'jobs_processed'       => array( 'success', __( '%s queued action(s) processed.', 'bits-groupsio-sync' ) ),
-			'no_jobs_due'          => array( 'success', __( 'No queued actions were due.', 'bits-groupsio-sync' ) ),
+			'jobs_processed'   => array( 'success', __( '%s queued action(s) processed.', 'bits-groupsio-sync' ) ),
+			'no_jobs_due'      => array( 'success', __( 'No queued actions were due.', 'bits-groupsio-sync' ) ),
 		);
 	}
 
@@ -170,20 +173,13 @@ final class SubgroupManagementPage {
 
 	/**
 	 * The redirect-free half of "Create subgroup" handling: verifies the
-	 * nonce, calls the API, then re-fetches the subgroup list as a
-	 * read-back to confirm the new subgroup actually exists before
-	 * reporting success, per #34's acceptance criteria. If a Title was
-	 * provided, a follow-up update_subgroup() call sets it (createsubgroup
-	 * has no title parameter — confirmed against the live docs), also
-	 * read-back verified — but reported via a distinct 'created_title_failed'
-	 * code rather than 'create_failed', since the subgroup itself was
-	 * already successfully created and confirmed by that point; reporting
-	 * it as a creation failure would invite a retry that collides with
-	 * the subgroup that already exists. Kept separate from
-	 * maybe_handle_post() (which redirects + exits) purely so this branch
-	 * is unit testable without terminating the test process. Not part of
-	 * this class's rendering API; only called by maybe_handle_post() and
-	 * tests.
+	 * nonce, validates the submitted Name, and queues the actual create
+	 * (SubgroupExecutionEngine::queue_create()) - per #50, no Groups.io
+	 * API call happens synchronously inside this request. Kept separate
+	 * from maybe_handle_post() (which redirects + exits) purely so this
+	 * branch is unit testable without terminating the test process. Not
+	 * part of this class's rendering API; only called by
+	 * maybe_handle_post() and tests.
 	 *
 	 * @return array{0: string, 1: string} Notice code and optional detail.
 	 */
@@ -198,93 +194,28 @@ final class SubgroupManagementPage {
 			return array( 'invalid_request', '' );
 		}
 
-		try {
-			GroupsIoApiClient::create_subgroup( self::parent_group(), $name, $description );
-		} catch ( GroupsIoApiException $exception ) {
-			return array( 'create_failed', self::friendly_error( $exception ) );
-		} catch ( GroupsIoTransportException $exception ) {
-			return array( 'create_failed', __( 'a connection problem occurred.', 'bits-groupsio-sync' ) );
-		}
+		SubgroupExecutionEngine::queue_create( $name, $title, $description, get_current_user_id() );
 
-		$expected_slug = self::parent_group() . '+' . $name;
-
-		// Defensive: clear any stale cache entry a previous, since-deleted
-		// subgroup with this same slug may have left behind, before the
-		// read-back below re-resolves it fresh.
-		SubgroupIdCache::invalidate( $expected_slug );
-
-		try {
-			$created = self::fetch_subgroup_by_slug( $expected_slug );
-		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
-			return self::lookup_failure_result( 'create_failed', $exception );
-		}
-		if ( null === $created ) {
-			return array( 'create_failed', __( 'the subgroup could not be confirmed after creation. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
-		}
-
-		// The create read-back above only confirms the subgroup exists
-		// under the expected slug - it doesn't confirm Groups.io actually
-		// applied the submitted Description. Recorded here rather than
-		// returned immediately: if a Title was also submitted, that must
-		// still be attempted below even if the description didn't
-		// confirm - returning early here would silently skip setting the
-		// title the admin also asked for.
-		$description_confirmed = (string) ( $created['desc'] ?? '' ) === $description;
-
-		if ( '' !== $title ) {
-			try {
-				GroupsIoApiClient::update_subgroup( (int) $created['id'], array( 'title' => $title ) );
-			} catch ( GroupsIoApiException $exception ) {
-				return array( 'created_title_failed', self::friendly_error( $exception ) );
-			} catch ( GroupsIoTransportException $exception ) {
-				return array( 'created_title_failed', __( 'a connection problem occurred while setting the title.', 'bits-groupsio-sync' ) );
-			}
-
-			try {
-				$with_title = self::fetch_subgroup_by_id( (int) $created['id'] );
-			} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
-				return self::lookup_failure_result( 'created_title_failed', $exception );
-			}
-			if ( null === $with_title || $with_title['title'] !== $title ) {
-				return array( 'created_title_failed', __( 'the title could not be confirmed after creation. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
-			}
-
-			// The title read-back above is a fresher listing than the
-			// one the description check above was based on - if the
-			// description had actually propagated by now, don't report
-			// a stale failure.
-			$description_confirmed = (string) ( $with_title['desc'] ?? '' ) === $description;
-		}
-
-		// Reported last, and as a distinct 'created_desc_failed' outcome
-		// (not 'create_failed'), for the same reason a title-set failure
-		// isn't reported as a creation failure: the subgroup itself was
-		// already created and confirmed (and the title, if any, has now
-		// also been set), so reporting a plain creation failure would
-		// invite a retry that collides with the subgroup that already
-		// exists.
-		if ( ! $description_confirmed ) {
-			return array( 'created_desc_failed', __( 'the description could not be confirmed. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
-		}
-
-		return array( 'created', '' );
+		return array( 'create_submitted', '' );
 	}
 
 	/**
 	 * The redirect-free half of "Update subgroup" handling. Re-fetches
 	 * the parent group's subgroup listing first and requires an exact
-	 * id+slug match before calling the API at all — the submitted
+	 * id+slug match before queuing anything — the submitted
 	 * subgroup_id/current_slug come from editable hidden form fields, so
 	 * this confirms the target actually belongs to the configured
 	 * parent rather than trusting client-supplied identifiers for a
 	 * rename-capable action. Only the fields that actually changed are
-	 * sent (a true partial update). Re-fetches again afterward as a
-	 * read-back to confirm each changed field actually took effect, per
-	 * #34's acceptance criteria. If the name changed, invalidates the
-	 * SubgroupIdCache entry under *both* the old and new slug before the
-	 * write — the new slug also needs clearing in case an unrelated,
-	 * since-deleted subgroup previously used it and left a stale mapping
-	 * behind. Does not touch any level's stored mandatory-groups list
+	 * queued (a true partial update); an unchanged submission is
+	 * detected here and reported immediately as 'updated' with nothing
+	 * queued, since that's local reasoning against an already-fetched
+	 * listing, not a Groups.io write. The actual update_subgroup() call
+	 * and its confirmation happen in a queued job
+	 * (SubgroupExecutionEngine::queue_update()) per #50 — this method's
+	 * own SubgroupIdCache invalidation was moved there too, since a
+	 * retried attempt must re-invalidate on every attempt, not just once
+	 * here. Does not touch any level's stored mandatory-groups list
 	 * (Phase 1's LevelMandatoryGroups is a free-text field, not a live
 	 * selector) — the limitation is surfaced as description text on the
 	 * Name field itself, not here.
@@ -330,34 +261,9 @@ final class SubgroupManagementPage {
 			return array( 'updated', '' );
 		}
 
-		if ( isset( $fields['name'] ) ) {
-			SubgroupIdCache::invalidate( $current_slug );
-			SubgroupIdCache::invalidate( $expected_slug );
-		}
+		SubgroupExecutionEngine::queue_update( $subgroup_id, $current_slug, $fields, get_current_user_id() );
 
-		try {
-			GroupsIoApiClient::update_subgroup( $subgroup_id, $fields );
-		} catch ( GroupsIoApiException $exception ) {
-			return array( 'update_failed', self::friendly_error( $exception ) );
-		} catch ( GroupsIoTransportException $exception ) {
-			return array( 'update_failed', __( 'a connection problem occurred.', 'bits-groupsio-sync' ) );
-		}
-
-		try {
-			$after = self::fetch_subgroup_by_id( $subgroup_id );
-		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
-			return self::lookup_failure_result( 'update_failed', $exception );
-		}
-		if ( null === $after ) {
-			return array( 'update_failed', __( 'the update could not be confirmed. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
-		}
-		foreach ( $fields as $key => $value ) {
-			if ( ( $after[ $key ] ?? null ) !== $value ) {
-				return array( 'update_failed', __( 'the update could not be confirmed. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
-			}
-		}
-
-		return array( 'updated', '' );
+		return array( 'update_submitted', '' );
 	}
 
 	/**
@@ -369,10 +275,14 @@ final class SubgroupManagementPage {
 	 * retried or duplicate delete request shouldn't fail just because an
 	 * earlier attempt already succeeded, per this project's
 	 * idempotent-tolerance requirement for Groups.io-touching operations
-	 * (.github/instructions/security-sensitive.instructions.md). A slug
+	 * (.github/instructions/security-sensitive.instructions.md); nothing
+	 * is queued in that case, since there's nothing left to do. A slug
 	 * *mismatch* against a still-present id is kept as a genuine
 	 * 'not_found' result, since that indicates the id/slug pairing is
 	 * stale or was tampered with, not that the delete already happened.
+	 * Otherwise, the actual remove_subgroup() call and its absence
+	 * confirmation happen in a queued job
+	 * (SubgroupExecutionEngine::queue_delete()) per #50.
 	 *
 	 * @return array{0: string, 1: string} Notice code and optional detail.
 	 */
@@ -422,35 +332,9 @@ final class SubgroupManagementPage {
 			return array( 'not_found', '' );
 		}
 
-		try {
-			GroupsIoApiClient::remove_subgroup( $subgroup_id );
-		} catch ( GroupsIoApiException $exception ) {
-			// The pre-check above can be stale (Groups.io's listing is
-			// eventually consistent, per assert_eventually() in
-			// SubgroupLifecycleIntegrationTest) - if the pre-check still saw
-			// the subgroup but deletegroup itself now reports it's already
-			// gone, that's an already-achieved delete, not a failure.
-			if ( 'group_not_found' === $exception->get_error_type() ) {
-				SubgroupIdCache::invalidate( $slug );
-				return array( 'deleted', '' );
-			}
-			return array( 'delete_failed', self::friendly_error( $exception ) );
-		} catch ( GroupsIoTransportException $exception ) {
-			return array( 'delete_failed', __( 'a connection problem occurred.', 'bits-groupsio-sync' ) );
-		}
+		SubgroupExecutionEngine::queue_delete( $subgroup_id, $slug, get_current_user_id() );
 
-		SubgroupIdCache::invalidate( $slug );
-
-		try {
-			$after = self::fetch_subgroup_by_id( $subgroup_id );
-		} catch ( GroupsIoApiException | GroupsIoTransportException $exception ) {
-			return self::lookup_failure_result( 'delete_failed', $exception );
-		}
-		if ( null !== $after ) {
-			return array( 'delete_failed', __( 'the deletion could not be confirmed. This can happen if Groups.io hasn\'t finished propagating the change yet - try refreshing in a moment.', 'bits-groupsio-sync' ) );
-		}
-
-		return array( 'deleted', '' );
+		return array( 'delete_submitted', '' );
 	}
 
 	/**
@@ -458,9 +342,10 @@ final class SubgroupManagementPage {
 	 * forces Action Scheduler to process any currently-due queued jobs
 	 * immediately (QueuedExecutionEngine::process_due_jobs()). Not
 	 * scoped to the current view - it processes whatever is globally
-	 * due (today, that's only ever User Assignment's jobs, since this
-	 * page's own create/update/delete actions remain synchronous - see
-	 * the class doc comment).
+	 * due, including this page's own create/update/delete jobs
+	 * (SubgroupExecutionEngine, per #50) as well as User Assignment's -
+	 * Action Scheduler's own queue runner processes every due action
+	 * system-wide, regardless of which hook queued it.
 	 *
 	 * @return int Number of queued actions processed.
 	 */
@@ -514,7 +399,7 @@ final class SubgroupManagementPage {
 						sprintf(
 							/* translators: %s: friendly error detail. */
 							__( 'Could not access Groups.io: %s. Check the configured API credential.', 'bits-groupsio-sync' ),
-							self::friendly_error( $exception )
+							$exception->friendly_message()
 						)
 					)
 				);
@@ -552,7 +437,7 @@ final class SubgroupManagementPage {
 					sprintf(
 						/* translators: %s: friendly error detail. */
 						__( 'Could not load subgroups: %s', 'bits-groupsio-sync' ),
-						self::friendly_error( $exception )
+						$exception->friendly_message()
 					)
 				)
 			);
@@ -664,7 +549,7 @@ final class SubgroupManagementPage {
 			try {
 				$subgroup = self::fetch_subgroup_by_id( $subgroup_id );
 			} catch ( GroupsIoApiException $exception ) {
-				$lookup_failed = self::friendly_error( $exception );
+				$lookup_failed = $exception->friendly_message();
 			} catch ( GroupsIoTransportException $exception ) {
 				$lookup_failed = __( 'a connection problem occurred.', 'bits-groupsio-sync' );
 			}
@@ -792,7 +677,7 @@ final class SubgroupManagementPage {
 					sprintf(
 						/* translators: %s: friendly error detail. */
 						__( 'Could not load members: %s', 'bits-groupsio-sync' ),
-						self::friendly_error( $exception )
+						$exception->friendly_message()
 					)
 				)
 			);
@@ -966,33 +851,10 @@ final class SubgroupManagementPage {
 	}
 
 	/**
-	 * Same as fetch_subgroup_by_id(), but matches by full slug — used as
-	 * the post-create read-back, where the new subgroup's numeric id
-	 * isn't already known to the caller ahead of time.
-	 *
-	 * @param string $slug Full slug ("parent+sub" form) to look up.
-	 * @return array<string, mixed>|null
-	 *
-	 * @throws GroupsIoApiException Propagated from the client on lookup failure.
-	 * @throws GroupsIoTransportException Propagated from the client on a transport failure.
-	 */
-	private static function fetch_subgroup_by_slug( string $slug ): ?array {
-		$subgroups = GroupsIoApiClient::get_subgroups( self::parent_group() );
-
-		foreach ( (array) ( $subgroups['data'] ?? array() ) as $subgroup ) {
-			if ( ( $subgroup['name'] ?? null ) === $slug ) {
-				return $subgroup;
-			}
-		}
-
-		return null;
-	}
-
-	/**
-	 * Converts a caught lookup-failure exception (from fetch_subgroup_by_id()/
-	 * fetch_subgroup_by_slug()) into a notice code/detail pair, keeping
-	 * every process_*() method's catch block for this case one line
-	 * instead of duplicating the API-vs-transport branch everywhere.
+	 * Converts a caught lookup-failure exception (from fetch_subgroup_by_id())
+	 * into a notice code/detail pair, keeping every process_*() method's
+	 * catch block for this case one line instead of duplicating the
+	 * API-vs-transport branch everywhere.
 	 *
 	 * @param string                                          $code      Notice code to use (e.g. 'delete_failed').
 	 * @param GroupsIoApiException|GroupsIoTransportException $exception Caught exception.
@@ -1000,41 +862,10 @@ final class SubgroupManagementPage {
 	 */
 	private static function lookup_failure_result( string $code, GroupsIoApiException|GroupsIoTransportException $exception ): array {
 		if ( $exception instanceof GroupsIoApiException ) {
-			return array( $code, self::friendly_error( $exception ) );
+			return array( $code, $exception->friendly_message() );
 		}
 
 		return array( $code, __( 'a connection problem occurred while verifying the subgroup.', 'bits-groupsio-sync' ) );
-	}
-
-	/**
-	 * Formats a GroupsIoApiException as plain language, never a raw API
-	 * error dump or machine-oriented error type/code, per #34's
-	 * acceptance criteria. Uses the `extra` detail when present
-	 * (Groups.io's own human-readable detail string, per
-	 * Groups.io-API-Reference.md's documented error convention) since
-	 * that's already written for a human reader; falls back to a
-	 * generic message rather than exposing the raw `type` value.
-	 *
-	 * @param GroupsIoApiException $exception Caught exception.
-	 * @return string
-	 */
-	private static function friendly_error( GroupsIoApiException $exception ): string {
-		if ( $exception instanceof GroupsIoRateLimitException ) {
-			return __( 'Groups.io is rate-limiting requests right now. Please try again shortly.', 'bits-groupsio-sync' );
-		}
-
-		// 'unexpected_status' carries a raw HTTP status/body dump in its
-		// extra field (see GroupsIoApiClient::request()), not a
-		// Groups.io-authored human-readable detail like every other error
-		// type - surfacing it verbatim would violate this page's
-		// plain-language error requirement.
-		if ( 'unexpected_status' === $exception->get_error_type() ) {
-			return __( 'an unexpected error occurred.', 'bits-groupsio-sync' );
-		}
-
-		$extra = $exception->get_extra();
-
-		return '' !== $extra ? $extra : __( 'an unexpected error occurred.', 'bits-groupsio-sync' );
 	}
 
 	/**

@@ -49,6 +49,7 @@ final class Plugin {
 		LevelMandatoryGroups::register();
 		MemberIndex::register();
 		QueuedExecutionEngine::register();
+		SubgroupExecutionEngine::register();
 		AdminNotifications::register();
 		GroupsIoManagementMenu::register();
 

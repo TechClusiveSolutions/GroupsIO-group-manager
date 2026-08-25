@@ -6,11 +6,23 @@ import { test, expect } from '@playwright/test';
  * across all three Subgroup Management views (List, Create, Details) -
  * each action a real "Groups.io update" as far as the plugin's own
  * code is concerned (browser -> WP admin -> nonce-checked POST ->
- * GroupsIoApiClient -> HTTP call -> response handling -> read-back
- * verification -> SubgroupIdCache invalidation -> redirect -> notice).
+ * queued via SubgroupExecutionEngine -> forced to run immediately via
+ * the Sync control -> GroupsIoApiClient -> HTTP call -> response
+ * handling -> SubgroupIdCache invalidation -> redirect -> notice).
  * The Groups.io API call itself is served by the E2E mock mu-plugin
  * (tests/e2e/mu-plugins/groupsio-api-mock.php), not the real
- * groups.io - everything else in the path is real.
+ * groups.io - everything else in the path is real, including the real
+ * Action Scheduler queue/execute round trip triggered by Sync (#50).
+ *
+ * Each Sync click's own notice accepts either "N queued action(s)
+ * processed" or "No queued actions were due" - with a real Action
+ * Scheduler now actually running (#114), its own WP-Cron trigger can
+ * legitimately claim and finish a just-queued job before this test's
+ * explicit Sync click gets to it, in which case there is genuinely
+ * nothing left due when Sync runs. Either notice means the job
+ * actually completed by that point; the assertion right after each
+ * one (on the resulting list/field state) is what actually confirms
+ * that, matching subgroup-management.spec.ts's own convention.
  *
  * Deliberately does not reuse the shared storageState other spec files
  * use, so this one test genuinely starts from "not logged in."
@@ -36,14 +48,18 @@ test( 'login through a full subgroup create/update/delete lifecycle', async ( { 
 		await expect( page.getByRole( 'heading', { name: 'Subgroup Management', exact: true } ) ).toBeVisible();
 	} );
 
-	await test.step( 'go to Create Subgroup and create one (a real Groups.io update)', async () => {
+	await test.step( 'go to Create Subgroup, create one, and Sync to force the queued create through (a real Groups.io update)', async () => {
 		await page.getByRole( 'link', { name: 'Create new subgroup' } ).click();
 		await expect( page.getByRole( 'heading', { name: 'Create Subgroup' } ) ).toBeVisible();
 
 		await page.getByLabel( 'Name', { exact: true } ).fill( initialName );
 		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
 
-		await expect( page.getByText( 'Subgroup created.' ) ).toBeVisible();
+		await expect( page.getByText( 'Subgroup creation submitted' ) ).toBeVisible();
+		await expect( page.getByRole( 'link', { name: new RegExp( `${ initialName }@` ) } ) ).toHaveCount( 0 );
+
+		await page.getByRole( 'button', { name: 'Sync' } ).click();
+		await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
 		await expect( page.getByRole( 'link', { name: new RegExp( `${ initialName }@` ) } ) ).toBeVisible();
 	} );
 
@@ -57,21 +73,28 @@ test( 'login through a full subgroup create/update/delete lifecycle', async ( { 
 		await expect( page.getByText( 'e2e-owner@example.test', { exact: true } ) ).toBeVisible();
 	} );
 
-	await test.step( 'rename it via the Details view (another Groups.io update)', async () => {
+	await test.step( 'rename it via the Details view and Sync to force the queued update through (another Groups.io update)', async () => {
 		await page.getByLabel( 'Name', { exact: true } ).fill( renamedName );
 		await page.getByRole( 'button', { name: 'Update' } ).click();
 
-		await expect( page.getByText( 'Subgroup updated.' ) ).toBeVisible();
+		await expect( page.getByText( 'Subgroup update submitted' ) ).toBeVisible();
+		await expect( page.getByLabel( 'Name', { exact: true } ) ).not.toHaveValue( renamedName );
+
+		await page.getByRole( 'button', { name: 'Sync' } ).click();
+		await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
 		await expect( page.getByLabel( 'Name', { exact: true } ) ).toHaveValue( renamedName );
 	} );
 
-	await test.step( 'delete it via the inline confirmation (a final Groups.io update)', async () => {
+	await test.step( 'delete it via the inline confirmation and Sync to force the queued delete through (a final Groups.io update)', async () => {
 		await page.getByRole( 'link', { name: 'Delete this subgroup' } ).click();
 		await expect( page.getByText( /Are you sure you want to delete this subgroup/ ) ).toBeVisible();
 
 		await page.getByRole( 'button', { name: 'Yes, delete this subgroup' } ).click();
 
-		await expect( page.getByText( 'Subgroup deleted.' ) ).toBeVisible();
+		await expect( page.getByText( 'Subgroup deletion submitted' ) ).toBeVisible();
+
+		await page.getByRole( 'button', { name: 'Sync' } ).click();
+		await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
 		await expect( page.getByRole( 'link', { name: new RegExp( `${ renamedName }@` ) } ) ).toHaveCount( 0 );
 	} );
 } );

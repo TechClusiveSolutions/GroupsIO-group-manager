@@ -3,11 +3,23 @@ import { test, expect } from '@playwright/test';
 /**
  * Edge cases for #34 beyond the happy-path lifecycle already covered
  * end-to-end in end-to-end.spec.ts: the List view's content, field
- * validation, error surfacing, the Details view's inline delete
- * confirmation cancel path, and the seeded fixture's member list.
- * Relies on the mock's seeded fixture subgroup
- * (tests/e2e/mu-plugins/groupsio-api-mock.php), which persists for the
- * whole suite run.
+ * validation, the Details view's inline delete confirmation cancel
+ * path, and the seeded fixture's member list. Relies on the mock's
+ * seeded fixture subgroup (tests/e2e/mu-plugins/groupsio-api-mock.php),
+ * which persists for the whole suite run.
+ *
+ * Create/Update/Delete moved from synchronous to queued+retried
+ * (SubgroupExecutionEngine, #50) - each submission now returns an
+ * immediate "submitted" notice, and the actual Groups.io write happens
+ * in a queued job. This suite uses the page's own Sync button to force
+ * that job to run synchronously within the request, matching the same
+ * scoping decision user-assignment-actions.spec.ts already established
+ * for User Assignment's own queued actions: exercise the queued
+ * redirect+notice and one forced-immediate execution via Sync, never a
+ * queued job's eventual failure after retries (that's
+ * SubgroupExecutionEngineTest's job, in PHPUnit, since simulating
+ * Action Scheduler's real minute-scale retry backoff isn't practical
+ * for a deterministic e2e run).
  */
 test.describe( 'Subgroup Management edge cases', () => {
 	test.beforeEach( async ( { page } ) => {
@@ -29,18 +41,19 @@ test.describe( 'Subgroup Management edge cases', () => {
 		await expect( page.getByRole( 'heading', { name: 'Create Subgroup' } ) ).toBeVisible();
 	} );
 
-	test( 'creating a subgroup with a name that already exists surfaces a plain-language error', async ( { page } ) => {
+	test( 'submitting Create returns an immediate "submitted" notice, not a synchronous result', async ( { page } ) => {
+		// #50: process_create() no longer validates the name against
+		// Groups.io at all (that moved into the queued job) - even a
+		// name that will eventually fail (already taken) still gets an
+		// immediate "submitted" response here, not a synchronous error.
 		await page.getByRole( 'link', { name: 'Create new subgroup' } ).click();
 		await page.getByLabel( 'Name', { exact: true } ).fill( 'fixture-subgroup' );
 		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
 
-		await expect( page.getByText( /Could not create the subgroup/ ) ).toBeVisible();
-		await expect( page.getByText( 'name already taken' ) ).toBeVisible();
-		// Never a raw API error dump.
-		await expect( page.getByText( '{"object"' ) ).toHaveCount( 0 );
+		await expect( page.getByText( 'Subgroup creation submitted' ) ).toBeVisible();
 	} );
 
-	test( 'Details view shows current values, live members, and lets a title-only update through', async ( { page } ) => {
+	test( 'Details view shows current values, live members, and a title-only update completes via Sync', async ( { page } ) => {
 		await page.getByRole( 'link', { name: /fixture-subgroup@/ } ).click();
 
 		await expect( page.getByRole( 'heading', { name: 'Subgroup Details' } ) ).toBeVisible();
@@ -54,8 +67,18 @@ test.describe( 'Subgroup Management edge cases', () => {
 		await page.getByLabel( 'Title (optional)' ).fill( 'Fixture Title' );
 		await page.getByRole( 'button', { name: 'Update' } ).click();
 
-		await expect( page.getByText( 'Subgroup updated.' ) ).toBeVisible();
+		await expect( page.getByText( 'Subgroup update submitted' ) ).toBeVisible();
+		// Not yet applied - the queued job hasn't run yet.
+		await expect( page.getByLabel( 'Title (optional)' ) ).not.toHaveValue( 'Fixture Title' );
+
+		await page.getByRole( 'button', { name: 'Sync' } ).click();
+		await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
 		await expect( page.getByLabel( 'Title (optional)' ) ).toHaveValue( 'Fixture Title' );
+
+		// Clean up so this test is repeatable within the same suite run.
+		await page.getByLabel( 'Title (optional)' ).fill( '' );
+		await page.getByRole( 'button', { name: 'Update' } ).click();
+		await page.getByRole( 'button', { name: 'Sync' } ).click();
 	} );
 
 	test( 'delete confirmation on the Details view can be cancelled without deleting anything', async ( { page } ) => {
@@ -71,12 +94,17 @@ test.describe( 'Subgroup Management edge cases', () => {
 	} );
 
 	test( 'every subgroup link on the List view has a distinct accessible name', async ( { page } ) => {
-		// Create a second subgroup so there are two links to distinguish between.
+		// Create a second subgroup so there are two links to distinguish
+		// between - Sync forces the queued create to actually run so it
+		// appears in the list within this same test.
 		const secondName = `distinct-row-${ Date.now() }`;
 		await page.getByRole( 'link', { name: 'Create new subgroup' } ).click();
 		await page.getByLabel( 'Name', { exact: true } ).fill( secondName );
 		await page.getByRole( 'button', { name: 'Create (Alt+C)', exact: true } ).click();
-		await expect( page.getByText( 'Subgroup created.' ) ).toBeVisible();
+		await expect( page.getByText( 'Subgroup creation submitted' ) ).toBeVisible();
+
+		await page.getByRole( 'button', { name: 'Sync' } ).click();
+		await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
 
 		await expect( page.getByRole( 'link', { name: /fixture-subgroup@/ } ) ).toBeVisible();
 		await expect( page.getByRole( 'link', { name: new RegExp( `${ secondName }@` ) } ) ).toBeVisible();
@@ -85,6 +113,10 @@ test.describe( 'Subgroup Management edge cases', () => {
 		await page.getByRole( 'link', { name: new RegExp( `${ secondName }@` ) } ).click();
 		await page.getByRole( 'link', { name: 'Delete this subgroup' } ).click();
 		await page.getByRole( 'button', { name: 'Yes, delete this subgroup' } ).click();
-		await expect( page.getByText( 'Subgroup deleted.' ) ).toBeVisible();
+		await expect( page.getByText( 'Subgroup deletion submitted' ) ).toBeVisible();
+
+		await page.getByRole( 'button', { name: 'Sync' } ).click();
+		await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
+		await expect( page.getByRole( 'link', { name: new RegExp( `${ secondName }@` ) } ) ).toHaveCount( 0 );
 	} );
 } );
