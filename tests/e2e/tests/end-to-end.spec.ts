@@ -14,6 +14,16 @@ import { test, expect } from '@playwright/test';
  * groups.io - everything else in the path is real, including the real
  * Action Scheduler queue/execute round trip triggered by Sync (#50).
  *
+ * Each Sync click's own notice accepts either "N queued action(s)
+ * processed" or "No queued actions were due" - with a real Action
+ * Scheduler now actually running (#114), its own WP-Cron trigger can
+ * legitimately claim and finish a just-queued job before this test's
+ * explicit Sync click gets to it, in which case there is genuinely
+ * nothing left due when Sync runs. Either notice means the job
+ * actually completed by that point; the assertion right after each
+ * one (on the resulting list/field state) is what actually confirms
+ * that, matching subgroup-management.spec.ts's own convention.
+ *
  * Deliberately does not reuse the shared storageState other spec files
  * use, so this one test genuinely starts from "not logged in."
  */
@@ -49,7 +59,7 @@ test( 'login through a full subgroup create/update/delete lifecycle', async ( { 
 		await expect( page.getByRole( 'link', { name: new RegExp( `${ initialName }@` ) } ) ).toHaveCount( 0 );
 
 		await page.getByRole( 'button', { name: 'Sync' } ).click();
-		await expect( page.getByText( /queued action\(s\) processed/ ) ).toBeVisible();
+		await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
 		await expect( page.getByRole( 'link', { name: new RegExp( `${ initialName }@` ) } ) ).toBeVisible();
 	} );
 
@@ -71,7 +81,7 @@ test( 'login through a full subgroup create/update/delete lifecycle', async ( { 
 		await expect( page.getByLabel( 'Name', { exact: true } ) ).not.toHaveValue( renamedName );
 
 		await page.getByRole( 'button', { name: 'Sync' } ).click();
-		await expect( page.getByText( /queued action\(s\) processed/ ) ).toBeVisible();
+		await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
 		await expect( page.getByLabel( 'Name', { exact: true } ) ).toHaveValue( renamedName );
 	} );
 
@@ -84,7 +94,7 @@ test( 'login through a full subgroup create/update/delete lifecycle', async ( { 
 		await expect( page.getByText( 'Subgroup deletion submitted' ) ).toBeVisible();
 
 		await page.getByRole( 'button', { name: 'Sync' } ).click();
-		await expect( page.getByText( /queued action\(s\) processed/ ) ).toBeVisible();
+		await expect( page.getByText( /queued action\(s\) processed|No queued actions were due/ ) ).toBeVisible();
 		await expect( page.getByRole( 'link', { name: new RegExp( `${ renamedName }@` ) } ) ).toHaveCount( 0 );
 	} );
 } );
