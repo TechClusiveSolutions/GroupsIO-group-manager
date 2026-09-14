@@ -40,6 +40,7 @@ if ( file_exists( BITS_GROUPSIO_SYNC_DIR . 'vendor/wordpress-plugins/action-sche
 
 register_activation_hook( __FILE__, array( 'BITS\GroupsIOSync\AuditLog', 'activate' ) );
 register_activation_hook( __FILE__, array( 'BITS\GroupsIOSync\MemberIndex', 'activate' ) );
+register_activation_hook( __FILE__, array( 'BITS\GroupsIOSync\GroupIndex', 'activate' ) );
 
 add_action(
 	'plugins_loaded',
